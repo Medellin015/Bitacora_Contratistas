@@ -9,16 +9,17 @@
    ============================================================================ */
 
 /* ===== 1. firebaseConfig ===== */
-// Pega aquí la configuración web del proyecto Firebase (Consola → Configuración
-// del proyecto → Tus apps). Mientras tenga <PENDIENTE> la app abre en modo
-// demostración con datos ficticios guardados en este navegador.
+// Configuración web del proyecto «bitacora-contratistas» (Consola → Configuración
+// del proyecto → Tus apps). Es pública por diseño: la seguridad vive en
+// firestore.rules. Si se vuelve a dejar en <PENDIENTE>, la app abre en modo
+// demostración con datos ficticios guardados en el navegador.
 window.firebaseConfig = {
-  apiKey: '<PENDIENTE>',
-  authDomain: '<PENDIENTE>.firebaseapp.com',
-  projectId: '<PENDIENTE>',
-  storageBucket: '<PENDIENTE>.appspot.com',
-  messagingSenderId: '<PENDIENTE>',
-  appId: '<PENDIENTE>',
+  apiKey: 'AIzaSyAxNFFygqoVBabOkNHlP5RFgRajo74QetE',
+  authDomain: 'bitacora-contratistas.firebaseapp.com',
+  projectId: 'bitacora-contratistas',
+  storageBucket: 'bitacora-contratistas.firebasestorage.app',
+  messagingSenderId: '450161614641',
+  appId: '1:450161614641:web:72f4c82728d6fcfe9e9a10',
 };
 window.VERSION_APP = '1.0.0';
 
