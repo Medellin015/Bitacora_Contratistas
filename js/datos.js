@@ -1150,7 +1150,12 @@
       return resumenUsuario(cred.user);
     },
     enviarVerificacion: () => (auth.currentUser ? auth.currentUser.sendEmailVerification() : Promise.resolve()),
-    recargar: async () => { if (auth.currentUser) await auth.currentUser.reload(); return resumenUsuario(auth.currentUser); },
+    // reload() actualiza el usuario en memoria, pero el token sigue diciendo email_verified: false
+    // y las reglas de Firestore leen el token: sin renovarlo, tras verificar el correo todo se niega.
+    recargar: async () => {
+      if (auth.currentUser) { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); }
+      return resumenUsuario(auth.currentUser);
+    },
     recuperarClave: (correo) => auth.sendPasswordResetEmail(U.normalizarCorreo(correo)),
     cambiarClave: (nueva) => auth.currentUser.updatePassword(nueva),
     cerrarSesion: () => auth.signOut(),
