@@ -1,0 +1,270 @@
+rules_version = '2';
+// ============================================================================
+// Reglas de Firestore — Bitácora Contratistas
+// Roles en usuarios/{uid}.rol: contratista · revisor · coordinador · admin.
+// Toda lectura y escritura exige sesión con el correo verificado y un perfil
+// activo, salvo la activación del contratista, que lee su precarga y crea su
+// perfil antes de tenerlo. Todo lo que no se declara aquí queda denegado.
+// Estructura:
+//   1. Sesión y rol
+//   2. Contratos: dueño y equipo asignado
+//   3. Configuración: parametros, formularios, catalogos, ventanas
+//   4. usuarios (+ privado/firma) y preRegistro
+//   5. contratos (+ cambios)
+//   6. borradores, envios y contadores
+//   7. solicitudes y notificaciones
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ===== 1. Sesión y rol ===== */
+    function signedIn() { return request.auth != null; }
+    // La app no deja entrar sin verificar el correo; las reglas tampoco.
+    function verificado() { return signedIn() && request.auth.token.email_verified == true; }
+    // La app guarda todos los correos en minúscula.
+    function correo() { return request.auth.token.email.lower(); }
+    function rutaUsuario(uid) { return /databases/$(database)/documents/usuarios/$(uid); }
+    function perfil() { return get(rutaUsuario(request.auth.uid)).data; }
+    function activo() {
+      return verificado() && exists(rutaUsuario(request.auth.uid)) && perfil().get('activo', true) == true;
+    }
+    function rol() { return perfil().rol; }
+    function esAdmin() { return activo() && rol() == 'admin'; }
+    function esContratista() { return activo() && rol() == 'contratista'; }
+    function esEquipo() { return activo() && rol() in ['revisor', 'coordinador']; }
+    function clavesCambiadas() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function soloCambia(claves) { return clavesCambiadas().hasOnly(claves); }
+    // Los «crear» de la app usan set(): si el documento ya existe llega como update.
+    // Exigir que no cambie su fecha de creación impide sobrescribir uno existente.
+    function noCambia(clave) { return !(clave in clavesCambiadas()); }
+
+    /* ===== 2. Contratos: dueño y equipo ===== */
+    function rutaContrato(id) { return /databases/$(database)/documents/contratos/$(id); }
+    function contrato(id) { return get(rutaContrato(id)).data; }
+    // d: contrato, envío o solicitud (los tres guardan contratistaUid, revisores y coordinadores).
+    function esDuenoDoc(d) { return esContratista() && d.contratistaUid == request.auth.uid; }
+    function esEquipoDoc(d) {
+      return esEquipo() && (request.auth.uid in d.revisores || request.auth.uid in d.coordinadores);
+    }
+    function esDuenoOEquipo(d) { return esDuenoDoc(d) || esEquipoDoc(d); }
+    // Los IDs de envíos y contadores empiezan por el ID del contrato, que nunca lleva «_» (U.slug).
+    function contratoDeId(id) { return id.split('_')[0]; }
+
+    /* ===== 3. Configuración ===== */
+    // Cualquier usuario activo la lee; solo el admin la escribe.
+    match /parametros/{id} {
+      allow read: if activo();
+      allow write: if esAdmin();
+    }
+    match /formularios/{formularioId} {
+      allow read: if activo();
+      allow write: if esAdmin();
+      match /versiones/{version} {
+        allow read: if activo();
+        allow write: if esAdmin();
+      }
+    }
+    match /catalogos/{catalogoId} {
+      allow read: if activo();
+      allow write: if esAdmin();
+    }
+    match /ventanas/{periodo} {
+      allow read: if activo();
+      allow write: if esAdmin();
+    }
+
+    /* ===== 4. usuarios y preRegistro ===== */
+    function rutaPre(cedula) { return /databases/$(database)/documents/preRegistro/$(cedula); }
+    function coincideConPrecarga(pre) {
+      return pre.correo == correo()
+        && request.resource.data.revisores == pre.get('revisores', [])
+        && request.resource.data.coordinadores == pre.get('coordinadores', []);
+    }
+    // Activación: el contratista crea su propio perfil con su correo y su precarga.
+    function activacionPropia(uid) {
+      return verificado() && request.auth.uid == uid
+        && request.resource.data.rol == 'contratista'
+        && request.resource.data.activo == true
+        && request.resource.data.correo == correo()
+        && exists(rutaPre(request.resource.data.cedula))
+        && coincideConPrecarga(get(rutaPre(request.resource.data.cedula)).data);
+    }
+
+    match /usuarios/{uid} {
+      // Cada quien lee su perfil, también antes de que exista (así la app sabe que falta
+      // la activación). El admin lee todos; el equipo, los de contratistas (van en el Word).
+      allow get: if (verificado() && request.auth.uid == uid)
+        || esAdmin()
+        || (esEquipo() && resource.data.rol == 'contratista');
+      allow list: if esAdmin();
+      allow create: if esAdmin() || activacionPropia(uid);
+      // El usuario solo cambia su teléfono; el admin, todo menos la fecha de creación.
+      allow update: if (esAdmin() && noCambia('creadoEn'))
+        || (activo() && request.auth.uid == uid && soloCambia(['telefono']));
+      allow delete: if esAdmin();
+
+      // Firma del contratista: la escribe él y la leen él, el admin y el equipo.
+      match /privado/{documento} {
+        allow read: if (activo() && request.auth.uid == uid)
+          || esAdmin()
+          || (esEquipo() && get(rutaUsuario(uid)).data.rol == 'contratista');
+        allow write: if activo() && request.auth.uid == uid;
+      }
+    }
+
+    match /preRegistro/{cedula} {
+      // El contratista lee su precarga solo si el correo coincide; si no existe, puede saberlo.
+      allow get: if esAdmin() || (verificado() && (resource == null || resource.data.correo == correo()));
+      allow list, create, delete: if esAdmin();
+      // Al activar, el contratista la marca como suya.
+      allow update: if esAdmin()
+        || (verificado()
+            && resource.data.correo == correo()
+            && resource.data.get('uid', null) in [null, request.auth.uid]
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.activado == true
+            && soloCambia(['activado', 'uid', 'activadoEn']));
+    }
+
+    /* ===== 5. Contratos ===== */
+    match /contratos/{contratoId} {
+      allow get, list: if esAdmin() || esDuenoOEquipo(resource.data);
+      allow create, delete: if esAdmin();
+      allow update: if (esAdmin() && noCambia('creadoEn'))
+        // El equipo edita la información y abre o cierra la edición del contratista.
+        || (esEquipoDoc(resource.data) && soloCambia(['info', 'permitirActualizar', 'actualizadoEn']))
+        // El contratista actualiza sus datos cuando la edición está abierta.
+        || (esDuenoDoc(resource.data)
+            && resource.data.permitirActualizar == true
+            && soloCambia(['info', 'actualizadoEn'])
+            && request.resource.data.info.diff(resource.data.info).affectedKeys().hasOnly(['contratista']))
+        // Activación: reclama el contrato precargado con su cédula y su correo.
+        || (esContratista()
+            && resource.data.contratistaUid == null
+            && resource.data.cedulaContratista == perfil().cedula
+            && resource.data.correoContratista == correo()
+            && request.resource.data.contratistaUid == request.auth.uid
+            && soloCambia(['contratistaUid', 'actualizadoEn']));
+
+      // Auditoría de cambios de la información del contrato.
+      match /cambios/{cambioId} {
+        allow read: if esAdmin() || esDuenoOEquipo(contrato(contratoId));
+        allow create: if (esAdmin() || esDuenoOEquipo(contrato(contratoId)))
+          && request.resource.data.por == request.auth.uid;
+      }
+    }
+
+    /* ===== 6. Borradores, envíos y contadores ===== */
+    // ID del borrador: «uid_contrato_formulario_período». Solo su autor lo usa.
+    match /borradores/{borradorId} {
+      allow read, delete: if activo() && borradorId.split('_')[0] == request.auth.uid;
+      allow create, update: if activo()
+        && borradorId.split('_')[0] == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+    }
+
+    function rutaFormulario(id) { return /databases/$(database)/documents/formularios/$(id); }
+    function rutaVentana(periodo) { return /databases/$(database)/documents/ventanas/$(periodo); }
+    function ventanaAbierta(formularioId, periodo, f) {
+      return f.config.get('requiereVentana', false) == false
+        || (exists(rutaVentana(periodo))
+            && formularioId in get(rutaVentana(periodo)).data.formularios
+            && request.time >= get(rutaVentana(periodo)).data.desde
+            && request.time <= get(rutaVentana(periodo)).data.hasta);
+    }
+    function dentroDelLimite(n, f) {
+      return f.config.get('limiteMensual', null) == null || n <= f.config.limiteMensual;
+    }
+    // Envío nuevo del contratista: su contrato, los revisores del contrato, ventana abierta,
+    // dentro del límite mensual y con el consecutivo avanzado en la misma transacción.
+    function envioPropioValido(envioId) {
+      let d = request.resource.data;
+      let c = contrato(d.contratoId);
+      let f = get(rutaFormulario(d.formularioId)).data;
+      return esContratista()
+        && c.contratistaUid == request.auth.uid
+        && d.contratistaUid == request.auth.uid
+        && d.revisores == c.revisores
+        && d.coordinadores == c.coordinadores
+        && envioId == d.contratoId + '_' + d.formularioId + '_' + d.periodo + '_' + string(d.n)
+        && d.estado == 'enviado'
+        && d.enCorreccion == false
+        && d.historial.size() == 1
+        && dentroDelLimite(d.n, f)
+        && ventanaAbierta(d.formularioId, d.periodo, f)
+        && getAfter(/databases/$(database)/documents/contadores/$(d.contratoId + '_' + d.formularioId)).data.ultimo == d.consecutivo;
+    }
+    // Corrección: el contratista reenvía dentro del plazo y deja rastro en el historial.
+    function correccionPropia() {
+      return esDuenoDoc(resource.data)
+        && resource.data.enCorreccion == true
+        && request.time <= resource.data.fechaLimiteCorreccion
+        && request.resource.data.estado == 'reenviado'
+        && request.resource.data.enCorreccion == false
+        && request.resource.data.historial.size() == resource.data.historial.size() + 1
+        && soloCambia(['respuestas', 'foto', 'datosDescarga', 'anexos', 'totales', 'estado', 'enCorreccion', 'historial', 'actualizadoEn']);
+    }
+    // Revisión: tomar, aprobar, devolver o reabrir. Solo cambia el estado y el flujo
+    // (y el Vo.Bo. digital de la descarga), y siempre agrega una entrada al historial.
+    function transicionDelEquipo() {
+      return esEquipoDoc(resource.data)
+        && request.resource.data.estado in ['en_revision', 'aprobado_revisor', 'aprobado', 'en_correccion']
+        && request.resource.data.historial.size() == resource.data.historial.size() + 1
+        && soloCambia(['estado', 'pasoActual', 'enCorreccion', 'fechaLimiteCorreccion', 'historial', 'actualizadoEn', 'datosDescarga'])
+        && (noCambia('datosDescarga')
+            || request.resource.data.datosDescarga.diff(resource.data.datosDescarga).affectedKeys().hasOnly(['voBoTexto']));
+    }
+
+    match /envios/{envioId} {
+      allow get, list: if esAdmin() || esDuenoOEquipo(resource.data);
+      allow create: if esAdmin() || envioPropioValido(envioId);
+      allow update: if (esAdmin() && noCambia('enviadoEn')) || correccionPropia() || transicionDelEquipo();
+      allow delete: if esAdmin();
+    }
+
+    // Consecutivo por contrato y formulario: solo avanza.
+    match /contadores/{contadorId} {
+      allow get: if esAdmin() || esDuenoOEquipo(contrato(contratoDeId(contadorId)));
+      allow create: if esAdmin()
+        || (esDuenoDoc(contrato(contratoDeId(contadorId))) && request.resource.data.ultimo is int);
+      allow update: if esAdmin()
+        || (esDuenoDoc(contrato(contratoDeId(contadorId))) && request.resource.data.ultimo > resource.data.ultimo);
+    }
+
+    /* ===== 7. Solicitudes y notificaciones ===== */
+    function solicitudPropia() {
+      let d = request.resource.data;
+      let c = contrato(d.contratoId);
+      return esContratista()
+        && c.contratistaUid == request.auth.uid
+        && d.contratistaUid == request.auth.uid
+        && d.revisores == c.revisores
+        && d.coordinadores == c.coordinadores
+        && d.origen == 'contratista'
+        && d.estado == 'pendiente';
+    }
+    // La devolución directa del equipo queda registrada como solicitud ya aprobada.
+    function devolucionDelEquipo() {
+      let d = request.resource.data;
+      return esEquipoDoc(contrato(d.contratoId)) && d.origen == 'revisor' && d.revisorUid == request.auth.uid;
+    }
+
+    match /solicitudes/{solicitudId} {
+      allow get, list: if esAdmin() || esDuenoOEquipo(resource.data);
+      allow create: if esAdmin() || solicitudPropia() || devolucionDelEquipo();
+      allow update: if esAdmin()
+        || (esEquipoDoc(resource.data) && soloCambia(['estado', 'revisorUid', 'fechaLimite', 'motivoRechazo', 'actualizadoEn']))
+        // Al reenviar la corrección, el contratista cierra la solicitud aprobada.
+        || (esDuenoDoc(resource.data)
+            && resource.data.estado == 'aprobada'
+            && request.resource.data.estado == 'finalizada'
+            && soloCambia(['estado', 'actualizadoEn']));
+    }
+
+    // Bitácora de correos: la escribe quien dispara el aviso y solo la lee el admin.
+    match /notificaciones/{notificacionId} {
+      allow create: if activo() && request.resource.data.por == request.auth.uid;
+      allow read: if esAdmin();
+    }
+  }
+}
