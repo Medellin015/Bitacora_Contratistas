@@ -68,6 +68,12 @@ bloquea `gstatic.com`), también abre en demostración y lo avisa en el banner.
 Cada vez que cambie `firestore.rules` hay que volver a publicarlas
 (`firebase deploy --only firestore:rules`, o pegarlas en Firestore → Reglas).
 
+Los formularios viven en Firestore: cambiar sus plantillas base en `js/datos.js`
+no toca los ya sembrados. Cuando una plantilla base sube de versión, el inicio
+del administrador y **Formularios** muestran «Hay una versión nueva…» con el
+botón **Actualizar**, que la publica como versión nueva. Las respuestas se
+guardan por id de pregunta, así que envíos y borradores siguen sirviendo.
+
 ### Cuentas: nadie se registra ni activa nada
 
 - **Contratistas**: su cuenta queda lista al crear o importar su contrato. Si

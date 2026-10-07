@@ -577,7 +577,8 @@
         "id": "cuenta_cobro",
         "nombre": "Cuenta de cobro y pago de seguridad social",
         "tipo": "CUENTA_COBRO",
-        "version": 1,
+        "version": 2,
+        "novedad": "Los aportes obligatorios y el pago realizado quedan en un solo paso: «Seguridad social».",
         "activo": true,
         "plantillaDescarga": "cuenta_cobro_provisional",
         "config": {
@@ -668,9 +669,16 @@
           },
           {
             "id": "aportes",
-            "nombre": "Pagos obligatorios (seguridad social)",
+            "nombre": "Seguridad social",
             "orden": 2,
+            "ayuda": "Aportes obligatorios del período y la planilla que pagaste.",
             "preguntas": [
+              {
+                "id": "sepAportes",
+                "etiqueta": "Aportes obligatorios",
+                "tipo": "SEPARADOR",
+                "ayuda": "Se calculan con el valor sobre el que cotizas y los porcentajes de Parámetros."
+              },
               {
                 "id": "esPensionado",
                 "etiqueta": "¿Es pensionado?",
@@ -797,14 +805,13 @@
                 "tipo": "CALCULADA",
                 "formato": "moneda",
                 "formula": "suma({planillas.total})"
-              }
-            ]
-          },
-          {
-            "id": "pagoRealizado",
-            "nombre": "Información sobre el pago realizado",
-            "orden": 3,
-            "preguntas": [
+              },
+              {
+                "id": "sepPago",
+                "etiqueta": "Pago realizado",
+                "tipo": "SEPARADOR",
+                "ayuda": "Datos de la planilla que pagaste y su PDF."
+              },
               {
                 "id": "pagos",
                 "etiqueta": "Planillas pagadas",
@@ -876,7 +883,7 @@
           {
             "id": "declaracion",
             "nombre": "Declaración juramentada",
-            "orden": 4,
+            "orden": 3,
             "preguntas": [
               {
                 "id": "declaraDeducciones",
@@ -889,7 +896,7 @@
           {
             "id": "anexos",
             "nombre": "Anexos",
-            "orden": 5,
+            "orden": 4,
             "preguntas": [
               {
                 "id": "oficioDependientes",
@@ -1293,9 +1300,8 @@
     DB.listarFormularios = async () => U.ordenarPor(await A.query('formularios', {}), (f) => f.nombre);
     DB.obtenerFormulario = (id) => A.get('formularios', id);
     DB.guardarFormulario = (f) => { const d = { ...f }; delete d.id; return A.set('formularios', f.id, { ...d, actualizadoEn: ahora() }); };
-    DB.publicarVersion = async (f) => {
+    DB.publicarVersion = async (f, version = (Number(f.version) || 0) + 1) => {
       const d = { ...f }; delete d.id;
-      const version = (Number(f.version) || 0) + 1;
       await A.set('formularios', f.id, { ...d, version, actualizadoEn: ahora() });
       await A.subSet('formularios', f.id, 'versiones', String(version), { ...d, version, publicadoEn: ahora() });
       return version;
