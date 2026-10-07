@@ -3,7 +3,7 @@
    Estructura:
      1. Rutas (hash) y guardia por rol
      2. Pantallas de carga / error
-     3. App: estado global, sesión, datos, tema, toasts, confirmaciones
+     3. App: estado global, sesión, datos, vista de contratista, tema, toasts, confirmaciones
      4. Montaje
    ============================================================================ */
 
@@ -83,6 +83,11 @@ const App = () => {
   const [estado, setEstado] = useState('cargando');       // cargando · anonimo · sin-verificar · sin-perfil · inactivo · listo · error
   const [errorCarga, setErrorCarga] = useState('');
   const [usuario, setUsuario] = useState(null);
+  // Rol con el que se ve la app: el del perfil o «contratista» cuando una cuenta con otro rol
+  // (admin, revisor, coordinador) abre su vista de contratista para sus propios contratos.
+  const [rol, setRol] = useState(null);
+  const [propios, setPropios] = useState([]);
+  const vistaRef = useRef((() => { try { return localStorage.getItem('bitacora.vista') || ''; } catch (e) { return ''; } })());
   const [parametros, setParametros] = useState(SEMILLAS.parametrosDefault);
   const [formularios, setFormularios] = useState([]);
   const [catalogos, setCatalogos] = useState([]);
@@ -132,12 +137,31 @@ const App = () => {
     if (!u.emailVerified) { setEstado('sin-verificar'); return; }
     if (!silencioso) setEstado('cargando');
     try {
-      const perfil = await DB.obtenerPerfil(u.uid);
+      let perfil = await DB.obtenerPerfil(u.uid);
       if (!perfil) { setEstado('sin-perfil'); return; }
-      if (perfil.activo === false) { setUsuario(perfil); setEstado('inactivo'); return; }
-      const [p, fs, cs, lista, vs] = await Promise.all([DB.obtenerParametros(), DB.listarFormularios(), DB.listarCatalogos(), DB.listarContratos({ rol: perfil.rol, uid: u.uid }), DB.listarVentanas().catch(() => [])]);
+      if (perfil.activo === false) { setUsuario(perfil); setRol(perfil.rol); setEstado('inactivo'); return; }
+      const [p, fs, cs, todos, vs] = await Promise.all([DB.obtenerParametros(), DB.listarFormularios(), DB.listarCatalogos(), DB.listarContratos({ rol: perfil.rol, uid: u.uid }), DB.listarVentanas().catch(() => [])]);
+      // Contratos creados antes de vincular la cuenta al crearlos: los que llevan el correo
+      // del propio admin quedan vinculados a su cuenta (sin crear cuentas ni enviar correos).
+      if (perfil.rol === 'admin') {
+        const pendientes = todos.filter((c) => !c.contratistaUid && U.normalizarCorreo(c.correoContratista) === u.email);
+        for (const c of pendientes) {
+          try {
+            await vincularCuentaContratista({ contratoId: c.id, cedula: U.soloDigitos(c.cedulaContratista), correo: u.email, revisores: c.revisores || [], coordinadores: c.coordinadores || [], perfil });
+            c.contratistaUid = u.uid;
+          } catch (e) { console.warn(`No se vinculó ${c.id} a la cuenta del admin:`, e); }
+        }
+        if (pendientes.some((c) => c.contratistaUid)) perfil = (await DB.obtenerPerfil(u.uid)) || perfil;
+      }
+      // Contratos donde esta cuenta es la contratista (también si su rol es otro).
+      const mios = perfil.rol === 'contratista' ? todos
+        : perfil.rol === 'admin' ? todos.filter((c) => c.contratistaUid === u.uid)
+          : await DB.listarContratos({ rol: 'contratista', uid: u.uid }).catch(() => []);
+      const rolVista = perfil.rol !== 'contratista' && vistaRef.current === 'contratista' && mios.length ? 'contratista' : perfil.rol;
+      const lista = rolVista === perfil.rol ? todos : mios;
       Flujos.configurar(p);
-      setUsuario(perfil); setParametros(p); setFormularios(fs); setCatalogos(cs); setContratos(lista); setVentanas(vs);
+      setUsuario(perfil); setRol(rolVista); setPropios(perfil.rol === 'contratista' ? [] : mios);
+      setParametros(p); setFormularios(fs); setCatalogos(cs); setContratos(lista); setVentanas(vs);
       setContratoId((actual) => (lista.some((c) => c.id === actual) ? actual : (lista[0] ? lista[0].id : '')));
       // Período por defecto: el de la ventana abierta; si no hay, el mes anterior.
       const ahora = new Date();
@@ -155,26 +179,40 @@ const App = () => {
   // Contadores de la navegación (pendientes)
   const recargarContadores = useCallback(async () => {
     const u = Auth.actual();
-    if (!u || !usuario) return;
+    if (!u || !usuario || !rol) return;
     try {
-      const [envios, solicitudes] = await Promise.all([DB.listarEnvios({ rol: usuario.rol, uid: u.uid }), DB.listarSolicitudes({ rol: usuario.rol, uid: u.uid })]);
+      const [envios, solicitudes] = await Promise.all([DB.listarEnvios({ rol, uid: u.uid }), DB.listarSolicitudes({ rol, uid: u.uid })]);
       const ahora = new Date();
-      if (usuario.rol === 'contratista') setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length + envios.filter((e) => correccionVigente(e, ahora)).length, revision: 0 });
-      else setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length, revision: envios.filter((e) => pendienteDeMi(e, usuario.rol, u.uid)).length });
+      if (rol === 'contratista') setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length + envios.filter((e) => correccionVigente(e, ahora)).length, revision: 0 });
+      else setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length, revision: envios.filter((e) => pendienteDeMi(e, rol, u.uid)).length });
     } catch (e) { console.warn('Contadores:', e); }
-  }, [usuario]);
+  }, [usuario, rol]);
   useEffect(() => { if (estado === 'listo') recargarContadores(); }, [estado, recargarContadores]);
 
   const elegirContrato = useCallback((id) => { setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ } }, []);
   const elegirPeriodo = useCallback((p) => setPeriodo(p), []);
-  const cerrarSesion = useCallback(async () => { await Auth.cerrarSesion(); setUsuario(null); setContratos([]); setEstado('anonimo'); window.location.hash = '#/'; }, []);
+  // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
+  const cambiarVista = useCallback((vista) => {
+    vistaRef.current = vista;
+    try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
+    window.location.hash = '#/';
+    cargarTodo();
+  }, [cargarTodo]);
+  const cerrarSesion = useCallback(async () => {
+    await Auth.cerrarSesion();
+    vistaRef.current = '';
+    try { localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
+    setUsuario(null); setRol(null); setPropios([]); setContratos([]); setEstado('anonimo'); window.location.hash = '#/';
+  }, []);
 
   const contrato = contratos.find((c) => c.id === contratoId) || null;
   const ventana = ventanas.find((v) => v.periodo === periodo) || null;
   const ctx = {
-    sesion, usuario: usuario ? { ...usuario, id: usuario.id || (sesion && sesion.uid) } : null, rol: usuario ? usuario.rol : null,
+    sesion, usuario: usuario ? { ...usuario, id: usuario.id || (sesion && sesion.uid) } : null,
+    rol: usuario ? rol || usuario.rol : null, rolCuenta: usuario ? usuario.rol : null, propios,
+    vista: usuario && rol === 'contratista' && usuario.rol !== 'contratista' ? 'contratista' : '',
     parametros, formularios, catalogos, contratos, contrato, contratoId, periodo, ventana, ventanas, contadores, tema, ruta,
-    navegar, avisar, confirmar, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, recargarTodo: () => cargarTodo(true), recargarContadores,
+    navegar, avisar, confirmar, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, cambiarVista, recargarTodo: () => cargarTodo(true), recargarContadores,
   };
 
   let contenido;

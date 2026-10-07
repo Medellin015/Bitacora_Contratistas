@@ -4,7 +4,8 @@
        catálogos y parámetros
    Estructura:
      1. Inicio del administrador
-     2. Contratos: tabla, nuevo contrato, asignación de revisores/coordinadores, preRegistro
+     2. Contratos: cuenta del contratista (se crea o vincula al crear el contrato), tabla,
+        nuevo contrato, asignación de revisores/coordinadores, preRegistro
      3. Importador Excel (plantilla, validación previa, resumen, importación)
      4. Usuarios
      5. Ventanas
@@ -17,21 +18,24 @@
 const PaginaAdminInicio = () => {
   const app = useApp();
   const { datos, cargando, recargar } = useCarga(async () => {
-    const [envios, solicitudes, pre] = await Promise.all([DB.listarEnvios({ rol: 'admin', uid: app.usuario.id, periodo: app.periodo }), DB.listarSolicitudes({ rol: 'admin', uid: app.usuario.id, estado: 'pendiente' }), DB.listarPreRegistros()]);
-    return { envios, solicitudes, pre };
+    const [envios, solicitudes] = await Promise.all([DB.listarEnvios({ rol: 'admin', uid: app.usuario.id, periodo: app.periodo }), DB.listarSolicitudes({ rol: 'admin', uid: app.usuario.id, estado: 'pendiente' })]);
+    return { envios, solicitudes };
   }, [app.periodo]);
   const envios = (datos && datos.envios) || [];
   const porEstado = U.agrupar(envios, (e) => e.estado);
-  const sinActivar = ((datos && datos.pre) || []).filter((p) => !p.activado).length;
+  const sinCuenta = app.contratos.filter((c) => !c.contratistaUid).length;
   const primerosPasos = [
     { ok: app.formularios.length > 0, texto: 'Formularios base cargados', accion: app.formularios.length ? null : <Boton tam="xs" onClick={async () => { await DB.sembrarBase(); app.avisar('exito', 'Formularios, catálogos y parámetros base creados'); app.recargarTodo(); }}>Sembrar</Boton> },
     { ok: app.parametros.nitEntidad && !String(app.parametros.nitEntidad).includes('<PENDIENTE>'), texto: 'Parámetros de la entidad (NIT, SMMLV, flujos)', accion: <Boton tam="xs" onClick={() => app.navegar('#/admin/parametros')}>Abrir</Boton> },
-    { ok: app.contratos.length > 0, texto: 'Contratos y contratistas precargados', accion: <Boton tam="xs" onClick={() => app.navegar('#/admin/contratos')}>Importar</Boton> },
+    { ok: app.contratos.length > 0, texto: 'Contratos (la cuenta de cada contratista queda lista al crearlo)', accion: <Boton tam="xs" onClick={() => app.navegar('#/admin/contratos')}>Importar</Boton> },
     { ok: !!app.ventana, texto: `Ventana de ${U.nombrePeriodo(app.periodo)}`, accion: <Boton tam="xs" onClick={() => app.navegar('#/admin/ventanas')}>Ventanas</Boton> },
   ];
   return (
     <div>
       <Encabezado titulo="Administración" subtitulo={`Resumen de ${U.nombrePeriodo(app.periodo)} · ${app.contratos.length} ${U.plural(app.contratos.length, 'contrato', 'contratos')}`} acciones={<Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()}>Actualizar</Boton>} />
+      {app.propios.length ? (
+        <div className="alerta-caja alerta-info mb-4 items-center flex-wrap"><Icono nombre="usuario" /><div className="flex-1 min-w-0 text-sm"><strong>También eres contratista</strong> ({app.propios.map((c) => c.numero || c.id).join(', ')}): tu informe y tu cuenta de cobro se diligencian desde tu vista de contratista.</div><Boton tam="sm" variante="primario" icono="contrato" onClick={() => app.cambiarVista('contratista')}>Ir a mi vista de contratista</Boton></div>
+      ) : null}
       <div className="grid gap-3 grid-cols-2 md:grid-cols-4 mb-4">
         <Indicador titulo="Envíos del período" valor={cargando ? '…' : envios.length} />
         <Indicador titulo="Aprobados" valor={cargando ? '…' : (porEstado.aprobado || []).length} tipo="exito" />
@@ -41,7 +45,7 @@ const PaginaAdminInicio = () => {
       <div className="grid gap-4 lg:grid-cols-2 items-start">
         <div className="tarjeta"><div className="tarjeta-cabecera"><h2>Puesta en marcha</h2></div><div className="tarjeta-cuerpo">
           <ul className="grid gap-2">{primerosPasos.map((p, i) => <li key={i} className="flex items-center gap-3 text-sm"><span className={`punto static inline-grid place-items-center w-6 h-6 rounded-full ${p.ok ? 'chip-exito' : 'chip-alerta'}`}><Icono nombre={p.ok ? 'check' : 'alerta'} tam={13} /></span><span className="flex-1">{p.texto}</span>{p.accion}</li>)}</ul>
-          {sinActivar ? <Alerta tipo="info" className="mt-3">{sinActivar} {U.plural(sinActivar, 'contratista precargado', 'contratistas precargados')} sin activar la cuenta.</Alerta> : null}
+          {sinCuenta ? <Alerta tipo="info" className="mt-3">{sinCuenta} {U.plural(sinCuenta, 'contrato', 'contratos')} sin cuenta vinculada: en Contratistas y contratos, pulsa «Vincular».</Alerta> : null}
         </div></div>
         <div className="tarjeta"><div className="tarjeta-cabecera"><h2>Estados del período</h2></div><div className="tarjeta-cuerpo">
           {cargando ? <Esqueleto filas={4} /> : (envios.length ? <ListaDatos items={Object.keys(U.ESTADOS).filter((k) => porEstado[k]).map((k) => ({ etiqueta: U.ESTADOS[k].etiqueta, valor: porEstado[k].length, mono: true }))} /> : <Vacio icono="envios" titulo="Sin envíos en el período" />)}
@@ -65,6 +69,42 @@ const SelectorUsuarios = ({ usuarios, rol, valor, onCambio, etiqueta }) => {
     </Campo>
   );
 };
+// Cuenta del contratista: el contrato queda listo al crearlo, sin activación. Si el correo
+// ya tiene perfil (un contratista, o el admin u otro usuario que también es contratista)
+// se vincula a ese; si no, se crea la cuenta y la persona recibe el enlace para definir su
+// contraseña, que además deja su correo verificado. Devuelve { uid, creada, nombre, correoEnviado }.
+const vincularCuentaContratista = async ({ contratoId, cedula, correo, nombres = '', apellidos = '', telefono = '', revisores = [], coordinadores = [], perfil }) => {
+  const existente = perfil || (await DB.buscarUsuariosPorCorreo([correo]))[0];
+  let cuenta;
+  if (existente) {
+    const suCedula = U.soloDigitos(existente.cedula);
+    if (suCedula && suCedula !== cedula) throw new Error(`${correo} ya es la cuenta de ${existente.nombreCompleto || 'otra persona'} con otra cédula (${suCedula})`);
+    await DB.actualizarPerfil(existente.id, { revisores, coordinadores, ...(suCedula ? {} : { cedula }) });
+    cuenta = { uid: existente.id, creada: false, nombre: existente.nombreCompleto || correo, correoEnviado: false };
+  } else {
+    const { uid, correoEnviado } = await Auth.crearCuentaSecundaria(correo, `Tmp-${U.idAleatorio().slice(0, 10)}!`);
+    const nombreCompleto = `${nombres} ${apellidos}`.replace(/\s+/g, ' ').trim();
+    await DB.crearPerfil(uid, { rol: 'contratista', nombres, apellidos, nombreCompleto, nombreCorto: U.nombreCorto(nombres, apellidos), cedula, correo, telefono, activo: true, revisores, coordinadores });
+    cuenta = { uid, creada: true, nombre: nombreCompleto, correoEnviado };
+  }
+  await DB.actualizarContrato(contratoId, { contratistaUid: cuenta.uid });
+  try { await DB.marcarActivado(cedula, cuenta.uid); } catch (e) { /* sin precarga: nada que marcar */ }
+  return cuenta;
+};
+// Contratos viejos sin nombres y apellidos separados: las dos últimas palabras son los apellidos.
+const separarNombre = (completo) => {
+  const p = String(completo || '').trim().split(/\s+/).filter(Boolean);
+  return p.length >= 3 ? { nombres: p.slice(0, -2).join(' '), apellidos: p.slice(-2).join(' ') } : { nombres: p[0] || '', apellidos: p.slice(1).join(' ') };
+};
+const textoCuenta = (cuenta, correo, miUid) => {
+  if (!cuenta.creada) return cuenta.uid === miUid ? 'Quedó vinculado a tu cuenta.' : `Quedó vinculado a la cuenta de ${cuenta.nombre}.`;
+  return cuenta.correoEnviado
+    ? `Se creó la cuenta de ${correo}: le llega un correo para definir su contraseña y con eso entra.`
+    : `Se creó la cuenta de ${correo}, pero el correo no salió: al entrar, que use «Primera vez: crear mi contraseña».`;
+};
+const errorCuenta = (e) => (e && e.code === 'auth/email-already-in-use'
+  ? 'ese correo ya tenía una cuenta sin perfil; el contrato se vincula cuando la persona entre con su contraseña'
+  : DB.traducirError(e));
 // Reasignar revisores/coordinadores: contrato + copias (perfil del contratista, envíos y solicitudes).
 const reasignar = async (contrato, usuarios, revisores, coordinadores) => {
   const correos = (ids) => ids.map((id) => { const u = usuarios.find((x) => x.id === id); return u ? U.normalizarCorreo(u.correo) : ''; }).filter(Boolean);
@@ -78,34 +118,42 @@ const reasignar = async (contrato, usuarios, revisores, coordinadores) => {
 };
 const ModalContrato = ({ contrato, usuarios, onCerrar, onGuardado }) => {
   const app = useApp();
-  const [f, setF] = useState(() => (contrato ? { numero: contrato.numero, etiqueta: contrato.etiqueta || '', cedula: contrato.cedulaContratista || '', correo: contrato.correoContratista || '', nombreCompleto: (contrato.info && contrato.info.contratista && contrato.info.contratista.nombreCompleto) || '', revisores: contrato.revisores || [], coordinadores: contrato.coordinadores || [], estado: contrato.estado || 'activo' } : { numero: '', etiqueta: '', cedula: '', correo: '', nombreCompleto: '', revisores: [], coordinadores: [], estado: 'activo' }));
+  const [f, setF] = useState(() => (contrato ? { numero: contrato.numero, etiqueta: contrato.etiqueta || '', cedula: contrato.cedulaContratista || '', correo: contrato.correoContratista || '', nombreCompleto: (contrato.info && contrato.info.contratista && contrato.info.contratista.nombreCompleto) || '', revisores: contrato.revisores || [], coordinadores: contrato.coordinadores || [], estado: contrato.estado || 'activo' } : { numero: '', etiqueta: '', cedula: '', correo: '', nombres: '', apellidos: '', telefono: '', revisores: [], coordinadores: [], estado: 'activo' }));
+  // El correo se corrige mientras el contrato no tenga cuenta vinculada.
+  const correoEditable = !contrato || !contrato.contratistaUid;
   const [guardando, setGuardando] = useState(false);
   const poner = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const guardar = async () => {
     const cedula = U.soloDigitos(f.cedula), correo = U.normalizarCorreo(f.correo);
     if (!f.numero.trim()) { app.avisar('alerta', 'Escribe el número del contrato'); return; }
-    if (!contrato && (cedula.length < 5 || !U.esCorreo(correo) || !f.nombreCompleto.trim())) { app.avisar('alerta', 'Cédula, correo y nombre del contratista son obligatorios'); return; }
+    if (!contrato && (cedula.length < 5 || !U.esCorreo(correo) || !f.nombres.trim() || !f.apellidos.trim())) { app.avisar('alerta', 'Cédula, correo, nombres y apellidos del contratista son obligatorios'); return; }
+    if (contrato && correoEditable && !U.esCorreo(correo)) { app.avisar('alerta', 'Escribe un correo válido para el contratista'); return; }
     setGuardando(true);
     try {
       const id = contrato ? contrato.id : U.slug(f.numero);
       const correosDe = (ids) => ids.map((x) => { const u = usuarios.find((y) => y.id === x); return u ? U.normalizarCorreo(u.correo) : ''; }).filter(Boolean);
       if (contrato) {
-        await DB.actualizarContrato(id, { numero: f.numero.trim(), etiqueta: f.etiqueta.trim(), estado: f.estado, 'info.contratista.nombreCompleto': f.nombreCompleto.trim() });
+        const cambiaCorreo = correoEditable && correo !== U.normalizarCorreo(contrato.correoContratista);
+        await DB.actualizarContrato(id, { numero: f.numero.trim(), etiqueta: f.etiqueta.trim(), estado: f.estado, 'info.contratista.nombreCompleto': f.nombreCompleto.trim(), ...(cambiaCorreo ? { correoContratista: correo } : {}) });
+        if (cambiaCorreo && contrato.cedulaContratista) await DB.actualizarPreRegistro(contrato.cedulaContratista, { correo }).catch(() => {});
         if (!U.igualProfundo(f.revisores, contrato.revisores || []) || !U.igualProfundo(f.coordinadores, contrato.coordinadores || [])) await reasignar(contrato, usuarios, f.revisores, f.coordinadores);
+        app.avisar('exito', 'Contrato actualizado');
       } else {
-        const existentes = await DB.buscarUsuariosPorCorreo([correo]);
-        const activo = existentes.find((u) => u.rol === 'contratista' && U.soloDigitos(u.cedula) === cedula);
+        const nombres = f.nombres.trim(), apellidos = f.apellidos.trim(), telefono = f.telefono.trim();
+        const nombreCompleto = `${nombres} ${apellidos}`.replace(/\s+/g, ' ');
         await DB.crearContrato(id, {
-          numero: f.numero.trim(), etiqueta: f.etiqueta.trim(), contratistaUid: activo ? activo.id : null, cedulaContratista: cedula, correoContratista: correo,
+          numero: f.numero.trim(), etiqueta: f.etiqueta.trim(), contratistaUid: null, cedulaContratista: cedula, correoContratista: correo,
           revisores: f.revisores, coordinadores: f.coordinadores, correosRevisores: correosDe(f.revisores), correosCoordinadores: correosDe(f.coordinadores), estado: 'activo', permitirActualizar: false,
-          info: { contratista: { nombreCompleto: f.nombreCompleto.trim(), cedula }, contrato: { numero: f.numero.trim() }, obligaciones: { lista: [] }, supervision: {}, modificaciones: {} },
+          info: { contratista: { nombreCompleto, cedula, telefono }, contrato: { numero: f.numero.trim() }, obligaciones: { lista: [] }, supervision: {}, modificaciones: {} },
         });
         const pre = await DB.obtenerPreRegistro(cedula);
-        if (pre) await DB.actualizarPreRegistro(cedula, { correo, nombreCompleto: f.nombreCompleto.trim(), contratos: U.unicos([...(pre.contratos || []), id]), revisores: f.revisores, coordinadores: f.coordinadores });
-        else await DB.guardarPreRegistro(cedula, { correo, nombreCompleto: f.nombreCompleto.trim(), contratos: [id], revisores: f.revisores, coordinadores: f.coordinadores, activado: !!activo, uid: activo ? activo.id : null });
-        if (activo) await DB.actualizarPerfil(activo.id, { revisores: f.revisores, coordinadores: f.coordinadores });
+        if (pre) await DB.actualizarPreRegistro(cedula, { correo, nombreCompleto, contratos: U.unicos([...(pre.contratos || []), id]), revisores: f.revisores, coordinadores: f.coordinadores });
+        else await DB.guardarPreRegistro(cedula, { correo, nombreCompleto, contratos: [id], revisores: f.revisores, coordinadores: f.coordinadores });
+        try {
+          const cuenta = await vincularCuentaContratista({ contratoId: id, cedula, correo, nombres, apellidos, telefono, revisores: f.revisores, coordinadores: f.coordinadores });
+          app.avisar('exito', `Contrato creado. ${textoCuenta(cuenta, correo, app.usuario.id)}`);
+        } catch (e) { app.avisar('alerta', `Contrato creado, pero sin cuenta: ${errorCuenta(e)}. Puedes reintentar con «Vincular».`); }
       }
-      app.avisar('exito', contrato ? 'Contrato actualizado' : 'Contrato creado');
       onGuardado();
     } catch (e) { app.avisar('error', DB.traducirError(e)); } finally { setGuardando(false); }
   };
@@ -115,13 +163,17 @@ const ModalContrato = ({ contrato, usuarios, onCerrar, onGuardado }) => {
         <Campo etiqueta="Número del contrato" obligatoria ayuda={contrato ? `ID: ${contrato.id}` : 'El ID se deriva del número (sin espacios ni guiones bajos).'}><Entrada value={f.numero} onChange={poner('numero')} placeholder="P-00000 DE 2026" /></Campo>
         <Campo etiqueta="Etiqueta" ayuda="Ayuda a distinguir varios contratos del mismo contratista."><Entrada value={f.etiqueta} onChange={poner('etiqueta')} placeholder="AGOSTO 4230" /></Campo>
         <Campo etiqueta="Cédula del contratista" obligatoria={!contrato}><Entrada className="mono" inputMode="numeric" value={f.cedula} onChange={poner('cedula')} disabled={!!contrato} /></Campo>
-        <Campo etiqueta="Correo del contratista" obligatoria={!contrato} ayuda="Con este correo activará su cuenta."><Entrada type="email" value={f.correo} onChange={poner('correo')} disabled={!!contrato} /></Campo>
-        <Campo etiqueta="Nombre completo" obligatoria={!contrato} className="md:col-span-2"><Entrada value={f.nombreCompleto} onChange={poner('nombreCompleto')} /></Campo>
+        <Campo etiqueta="Correo del contratista" obligatoria={correoEditable} ayuda={!contrato ? 'Si ya tiene cuenta se vincula a esa; si no, se le crea y le llega un correo para definir su contraseña.' : (correoEditable ? 'Aún sin cuenta: corrígelo si hace falta y luego usa «Vincular».' : 'Su cuenta ya está vinculada.')}><Entrada type="email" value={f.correo} onChange={poner('correo')} disabled={!correoEditable} /></Campo>
+        {contrato ? <Campo etiqueta="Nombre completo" className="md:col-span-2"><Entrada value={f.nombreCompleto} onChange={poner('nombreCompleto')} /></Campo> : <>
+          <Campo etiqueta="Nombres" obligatoria><Entrada value={f.nombres} onChange={poner('nombres')} autoComplete="off" /></Campo>
+          <Campo etiqueta="Apellidos" obligatoria><Entrada value={f.apellidos} onChange={poner('apellidos')} autoComplete="off" /></Campo>
+          <Campo etiqueta="Teléfono"><Entrada inputMode="tel" value={f.telefono} onChange={poner('telefono')} autoComplete="off" /></Campo>
+        </>}
         {contrato ? <Campo etiqueta="Estado"><Selector vacio={null} opciones={[{ valor: 'activo', etiqueta: 'Activo' }, { valor: 'terminado', etiqueta: 'Terminado' }]} value={f.estado} onChange={poner('estado')} /></Campo> : null}
         <SelectorUsuarios usuarios={usuarios} rol="revisor" etiqueta="Revisores" valor={f.revisores} onCambio={(v) => setF({ ...f, revisores: v })} />
         <SelectorUsuarios usuarios={usuarios} rol="coordinador" etiqueta="Coordinadores" valor={f.coordinadores} onCambio={(v) => setF({ ...f, coordinadores: v })} />
       </div>
-      {!contrato ? <Alerta tipo="info" className="mt-4">Después de crearlo, abre el contrato para completar fechas, valores, objeto, obligaciones y supervisión (o usa el importador Excel).</Alerta> : null}
+      {!contrato ? <Alerta tipo="info" className="mt-4">El contrato queda listo al guardarlo, con la cuenta del contratista vinculada. Después ábrelo para completar fechas, valores, objeto, obligaciones y supervisión (o usa el importador Excel).</Alerta> : null}
     </Modal>
   );
 };
@@ -138,13 +190,29 @@ const PaginaAdminContratos = () => {
     if (!(await app.confirmar({ titulo: 'Eliminar contrato', mensaje: `Se elimina ${c.numero}. Los envíos existentes quedan huérfanos; úsalo solo si se creó por error.`, textoOk: 'Eliminar', peligro: true }))) return;
     try { await DB.eliminarContrato(c.id); app.avisar('exito', 'Contrato eliminado'); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }
   };
+  // Contratos sin cuenta (creados antes de vincular al crear, o si la cuenta no se pudo crear).
+  const vincular = async (c) => {
+    const correo = U.normalizarCorreo(c.correoContratista), cedula = U.soloDigitos(c.cedulaContratista);
+    if (!U.esCorreo(correo) || cedula.length < 5) { app.avisar('alerta', 'El contrato no tiene cédula y correo válidos del contratista: corrígelos en «Asignar / editar».'); return; }
+    const dueno = usuarios.find((u) => U.normalizarCorreo(u.correo) === correo);
+    const mensaje = dueno
+      ? `Se vincula ${c.numero} a la cuenta existente de ${dueno.nombreCompleto} (${correo}).`
+      : `Se crea la cuenta de ${correo} y se vincula ${c.numero}. Le llega un correo para definir su contraseña; con eso entra, sin activar nada.`;
+    if (!(await app.confirmar({ titulo: 'Vincular cuenta', mensaje, textoOk: dueno ? 'Vincular' : 'Crear cuenta' }))) return;
+    try {
+      const ic = (c.info && c.info.contratista) || {};
+      const cuenta = await vincularCuentaContratista({ contratoId: c.id, cedula, correo, ...separarNombre(ic.nombreCompleto), telefono: ic.telefono || '', revisores: c.revisores || [], coordinadores: c.coordinadores || [] });
+      app.avisar('exito', textoCuenta(cuenta, correo, app.usuario.id));
+      recargar(true); app.recargarTodo();
+    } catch (e) { app.avisar('error', `No se pudo vincular: ${errorCuenta(e)}`); }
+  };
   const eliminarPre = async (p) => {
     if (!(await app.confirmar({ titulo: 'Eliminar precarga', mensaje: `Se elimina la precarga de ${p.nombreCompleto} (${p.id}). Si ya activó su cuenta, el perfil no se toca.`, textoOk: 'Eliminar', peligro: true }))) return;
     try { await DB.adaptador.delete('preRegistro', p.id); app.avisar('exito', 'Precarga eliminada'); recargar(true); } catch (e) { app.avisar('error', DB.traducirError(e)); }
   };
   return (
     <div>
-      <Encabezado titulo="Contratistas y contratos" subtitulo="Precarga, importación y asignación de revisores y coordinadores." acciones={<><Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => { recargar(); app.recargarTodo(); }}>Actualizar</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={() => setModal('nuevo')}>Nuevo contrato</Boton></>} />
+      <Encabezado titulo="Contratistas y contratos" subtitulo="Al crear o importar un contrato, la cuenta del contratista queda lista. Aquí también asignas revisores y coordinadores." acciones={<><Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => { recargar(); app.recargarTodo(); }}>Actualizar</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={() => setModal('nuevo')}>Nuevo contrato</Boton></>} />
       <Pestanas activa={pestana} onCambio={setPestana} lista={[{ id: 'contratos', etiqueta: 'Contratos', icono: 'contrato', contador: app.contratos.length }, { id: 'pre', etiqueta: 'Precargados', icono: 'cedula', contador: ((datos && datos.pre) || []).filter((p) => !p.activado).length }, { id: 'importar', etiqueta: 'Importar Excel', icono: 'excel' }]} />
       <div className="mt-4">
         {pestana === 'contratos' ? <>
@@ -152,7 +220,7 @@ const PaginaAdminContratos = () => {
           <Tabla cargando={cargando} filas={lista} vacio={<Vacio icono="contrato" titulo="Sin contratos" texto="Crea uno o importa el Excel." />} columnas={[
             { titulo: 'Contrato', render: (c) => <span className="mono">{c.numero}</span> }, { titulo: 'Etiqueta', clave: 'etiqueta' },
             { titulo: 'Contratista', render: (c) => <span>{(c.info && c.info.contratista && c.info.contratista.nombreCompleto) || '—'}<div className="text-xs texto-3 mono">{c.cedulaContratista}</div></span> },
-            { titulo: 'Cuenta', render: (c) => (c.contratistaUid ? <Chip tipo="exito" icono="check">Activada</Chip> : <Chip tipo="alerta" icono="reloj">Sin activar</Chip>) },
+            { titulo: 'Cuenta', render: (c) => (c.contratistaUid ? <Chip tipo="exito" icono="check">{c.contratistaUid === app.usuario.id ? 'Tu cuenta' : 'Vinculada'}</Chip> : <Boton tam="xs" variante="acento" icono="enlace" titulo="Crear o vincular la cuenta del contratista" onClick={() => vincular(c)}>Vincular</Boton>) },
             { titulo: 'Revisores', render: (c) => (c.revisores || []).map(nombreDe).join(', ') || <span className="texto-3">Sin asignar</span> },
             { titulo: 'Coordinadores', render: (c) => (c.coordinadores || []).map(nombreDe).join(', ') || <span className="texto-3">Sin asignar</span> },
             { titulo: 'Estado', render: (c) => <Chip tipo={c.estado === 'terminado' ? 'neutro' : 'primario'}>{c.estado === 'terminado' ? 'Terminado' : 'Activo'}</Chip> },
@@ -160,7 +228,7 @@ const PaginaAdminContratos = () => {
         </> : null}
         {pestana === 'pre' ? <Tabla cargando={cargando} filas={(datos && datos.pre) || []} vacio={<Vacio icono="cedula" titulo="Sin precargas" />} columnas={[
           { titulo: 'Cédula', render: (p) => <span className="mono">{p.id}</span> }, { titulo: 'Nombre', clave: 'nombreCompleto' }, { titulo: 'Correo', clave: 'correo' },
-          { titulo: 'Contratos', render: (p) => (p.contratos || []).join(', ') }, { titulo: 'Activación', render: (p) => (p.activado ? <Chip tipo="exito" icono="check">Activada</Chip> : <Chip tipo="alerta">Pendiente</Chip>) },
+          { titulo: 'Contratos', render: (p) => (p.contratos || []).join(', ') }, { titulo: 'Cuenta', render: (p) => (p.activado ? <Chip tipo="exito" icono="check">Vinculada</Chip> : <Chip tipo="alerta">Pendiente</Chip>) },
         ]} acciones={(p) => <Boton tam="xs" variante="fantasma" icono="basura" soloIcono titulo="Eliminar" onClick={() => eliminarPre(p)} />} /> : null}
         {pestana === 'importar' ? <ImportadorExcel usuarios={usuarios} alTerminar={() => { recargar(true); app.recargarTodo(); }} /> : null}
       </div>
@@ -238,43 +306,47 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
     if (!validas.length) return;
     if (!(await app.confirmar({ titulo: 'Importar', mensaje: `Se importarán ${validas.length} ${U.plural(validas.length, 'fila válida', 'filas válidas')}; las ${filas.length - validas.length} con errores se omiten.`, textoOk: 'Importar' }))) return;
     setImportando(true);
-    const res = { contratosCreados: 0, contratosActualizados: 0, preNuevos: 0, preActualizados: 0, vinculados: 0, errores: [] };
+    const res = { contratosCreados: 0, contratosActualizados: 0, preNuevos: 0, preActualizados: 0, cuentasNuevas: 0, vinculados: 0, errores: [] };
     try {
       const catalogos = U.clonar(await DB.listarCatalogos());
-      const correos = U.unicos(validas.map((f) => f.correo));
-      const existentes = await DB.buscarUsuariosPorCorreo(correos);
       for (const f of validas) {
         setProgreso(`Fila ${f.fila}: ${f.numeroContrato}`);
         try {
           const componente = await opcionCatalogo(catalogos, 'componentes', 'Componentes del proyecto', f.componente);
           const equipo = await opcionCatalogo(catalogos, 'equipos', 'Equipos o unidades', f.equipo);
           const correosDe = (ids) => ids.map((x) => { const u = usuarios.find((y) => y.id === x); return u ? U.normalizarCorreo(u.correo) : ''; }).filter(Boolean);
-          const activo = existentes.find((u) => u.rol === 'contratista' && U.normalizarCorreo(u.correo) === f.correo && U.soloDigitos(u.cedula) === f.cedula);
           const nombreCompleto = `${f.nombres} ${f.apellidos}`.replace(/\s+/g, ' ');
           const infoContrato = U.sinIndefinidos({ numero: f.numeroContrato, objeto: f.objeto, componente, equipo, fechaInicio: f.fechaInicio, fechaFin: f.fechaFin, plazoDias: f.plazoDias == null ? '' : f.plazoDias, valorTotal: f.valorTotal == null ? '' : f.valorTotal, valorMensual: f.valorMensual == null ? '' : f.valorMensual, cdp: f.cdp, rp: f.rp });
           const existente = await DB.obtenerContrato(f.id);
           if (existente) {
-            await DB.actualizarContrato(f.id, { numero: f.numeroContrato, etiqueta: f.etiqueta, 'info.contrato': { ...(existente.info && existente.info.contrato), ...infoContrato }, 'info.obligaciones': { lista: f.obligaciones.length ? f.obligaciones : ((existente.info && existente.info.obligaciones && existente.info.obligaciones.lista) || []) }, 'info.supervision': { supervisor: f.supervisor, validador: f.validador }, 'info.contratista.nombreCompleto': nombreCompleto, 'info.contratista.rolProceso': f.rolProceso, 'info.contratista.telefono': f.telefono }, { por: app.usuario.id, cambios: { importacion: { antes: null, despues: `Fila ${f.fila}` } } });
+            await DB.actualizarContrato(f.id, { numero: f.numeroContrato, etiqueta: f.etiqueta, ...(existente.contratistaUid ? {} : { correoContratista: f.correo }), 'info.contrato': { ...(existente.info && existente.info.contrato), ...infoContrato }, 'info.obligaciones': { lista: f.obligaciones.length ? f.obligaciones : ((existente.info && existente.info.obligaciones && existente.info.obligaciones.lista) || []) }, 'info.supervision': { supervisor: f.supervisor, validador: f.validador }, 'info.contratista.nombreCompleto': nombreCompleto, 'info.contratista.rolProceso': f.rolProceso, 'info.contratista.telefono': f.telefono }, { por: app.usuario.id, cambios: { importacion: { antes: null, despues: `Fila ${f.fila}` } } });
             if (!U.igualProfundo(f.revisores, existente.revisores || []) || !U.igualProfundo(f.coordinadores, existente.coordinadores || [])) await reasignar(existente, usuarios, f.revisores, f.coordinadores);
             res.contratosActualizados++;
           } else {
             await DB.crearContrato(f.id, {
-              numero: f.numeroContrato, etiqueta: f.etiqueta, contratistaUid: activo ? activo.id : null, cedulaContratista: f.cedula, correoContratista: f.correo,
+              numero: f.numeroContrato, etiqueta: f.etiqueta, contratistaUid: null, cedulaContratista: f.cedula, correoContratista: f.correo,
               revisores: f.revisores, coordinadores: f.coordinadores, correosRevisores: correosDe(f.revisores), correosCoordinadores: correosDe(f.coordinadores), estado: 'activo', permitirActualizar: false,
               info: { contratista: { nombreCompleto, cedula: f.cedula, telefono: f.telefono, rolProceso: f.rolProceso, rutaNas: String(app.parametros.rutaNasPlantilla || '').replace(/<CEDULA>/g, f.cedula) }, contrato: infoContrato, obligaciones: { lista: f.obligaciones }, supervision: { supervisor: f.supervisor, validador: f.validador }, modificaciones: { adiciones: [], ampliaciones: [], suspensiones: [], garantias: [], pagos: [] } },
             });
             res.contratosCreados++;
-            if (activo) res.vinculados++;
           }
           const pre = await DB.obtenerPreRegistro(f.cedula);
           if (pre) { await DB.actualizarPreRegistro(f.cedula, { correo: f.correo, nombreCompleto, contratos: U.unicos([...(pre.contratos || []), f.id]), revisores: f.revisores, coordinadores: f.coordinadores }); res.preActualizados++; }
-          else { await DB.guardarPreRegistro(f.cedula, { correo: f.correo, nombreCompleto, contratos: [f.id], revisores: f.revisores, coordinadores: f.coordinadores, activado: !!activo, uid: activo ? activo.id : null }); res.preNuevos++; }
-          if (activo) await DB.actualizarPerfil(activo.id, { revisores: f.revisores, coordinadores: f.coordinadores });
+          else { await DB.guardarPreRegistro(f.cedula, { correo: f.correo, nombreCompleto, contratos: [f.id], revisores: f.revisores, coordinadores: f.coordinadores }); res.preNuevos++; }
+          // La cuenta del contratista queda lista con la importación (también en contratos que aún no la tenían).
+          if (!(existente && existente.contratistaUid)) {
+            try {
+              const cedula = (existente && U.soloDigitos(existente.cedulaContratista)) || f.cedula;
+              const cuenta = await vincularCuentaContratista({ contratoId: f.id, cedula, correo: f.correo, nombres: f.nombres, apellidos: f.apellidos, telefono: f.telefono, revisores: f.revisores, coordinadores: f.coordinadores });
+              if (cuenta.creada) res.cuentasNuevas++; else res.vinculados++;
+              if (cuenta.creada && !cuenta.correoEnviado) res.errores.push(`Fila ${f.fila}: la cuenta se creó, pero el correo no salió (que use «Primera vez: crear mi contraseña»)`);
+            } catch (e) { res.errores.push(`Fila ${f.fila}: contrato importado sin cuenta (${errorCuenta(e)})`); }
+          }
         } catch (e) { res.errores.push(`Fila ${f.fila}: ${DB.traducirError(e)}`); }
       }
       for (const c of catalogos.filter((x) => x.modificado)) { const d = { ...c }; delete d.modificado; await DB.guardarCatalogo(c.id, d); }
       setResultado(res);
-      app.avisar(res.errores.length ? 'alerta' : 'exito', `Importación terminada: ${res.contratosCreados} creados, ${res.contratosActualizados} actualizados${res.errores.length ? `, ${res.errores.length} con error` : ''}`);
+      app.avisar(res.errores.length ? 'alerta' : 'exito', `Importación terminada: ${res.contratosCreados} creados, ${res.contratosActualizados} actualizados, ${res.cuentasNuevas} ${U.plural(res.cuentasNuevas, 'cuenta nueva', 'cuentas nuevas')}${res.errores.length ? `, ${res.errores.length} con aviso` : ''}`);
       alTerminar();
     } catch (e) { app.avisar('error', DB.traducirError(e)); } finally { setImportando(false); setProgreso(''); }
   };
@@ -282,7 +354,7 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
   return (
     <div className="grid gap-4">
       <div className="tarjeta"><div className="tarjeta-cuerpo grid gap-3">
-        <p className="text-sm texto-2">Una fila por contrato. Columnas: <span className="mono text-xs">{COLUMNAS_IMPORT.join(', ')}</span>. Los correos de revisores y coordinadores deben existir ya como usuarios. Las obligaciones se separan con «|».</p>
+        <p className="text-sm texto-2">Una fila por contrato. Columnas: <span className="mono text-xs">{COLUMNAS_IMPORT.join(', ')}</span>. Los correos de revisores y coordinadores deben existir ya como usuarios. Las obligaciones se separan con «|». La cuenta de cada contratista queda lista al importar: si su correo aún no tiene cuenta, se crea y le llega un correo para definir su contraseña.</p>
         <div className="flex gap-2 flex-wrap">
           <Boton tam="sm" icono="descargar" onClick={plantilla}>Descargar plantilla</Boton>
           <label className="btn btn-primario btn-sm cursor-pointer"><Icono nombre="subir" /> Elegir Excel<input type="file" className="sr-solo" accept=".xlsx,.xls,.csv" onChange={(e) => { leer(e.target.files[0]); e.target.value = ''; }} /></label>
@@ -300,7 +372,7 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
           </div>
         </div>
       ) : null}
-      {resultado ? <Alerta tipo={resultado.errores.length ? 'alerta' : 'exito'}><div>Contratos creados: {resultado.contratosCreados} · actualizados: {resultado.contratosActualizados} · precargas nuevas: {resultado.preNuevos} · actualizadas: {resultado.preActualizados} · vinculados a cuentas activas: {resultado.vinculados}</div>{resultado.errores.length ? <ul className="mt-1 text-xs">{resultado.errores.map((e, i) => <li key={i}>{e}</li>)}</ul> : null}</Alerta> : null}
+      {resultado ? <Alerta tipo={resultado.errores.length ? 'alerta' : 'exito'}><div>Contratos creados: {resultado.contratosCreados} · actualizados: {resultado.contratosActualizados} · cuentas nuevas: {resultado.cuentasNuevas} · vinculados a cuentas existentes: {resultado.vinculados} · precargas nuevas: {resultado.preNuevos} · actualizadas: {resultado.preActualizados}</div>{resultado.errores.length ? <ul className="mt-1 text-xs">{resultado.errores.map((e, i) => <li key={i}>{e}</li>)}</ul> : null}</Alerta> : null}
     </div>
   );
 };
@@ -317,9 +389,11 @@ const ModalUsuario = ({ onCerrar, onGuardado }) => {
     setGuardando(true);
     try {
       const claveTemporal = `Tmp-${U.idAleatorio().slice(0, 10)}!`;
-      const uid = await Auth.crearCuentaSecundaria(correo, claveTemporal);
+      const { uid, correoEnviado } = await Auth.crearCuentaSecundaria(correo, claveTemporal);
       await DB.crearPerfil(uid, { rol: f.rol, nombres: f.nombres.trim(), apellidos: f.apellidos.trim(), nombreCompleto: `${f.nombres.trim()} ${f.apellidos.trim()}`, nombreCorto: U.nombreCorto(f.nombres, f.apellidos), cedula: U.soloDigitos(f.cedula), correo, telefono: f.telefono.trim(), activo: true, revisores: [], coordinadores: [] });
-      app.avisar('exito', MODO_DEMO ? 'Usuario creado (demostración)' : 'Usuario creado. Recibirá un correo para definir su contraseña y deberá verificar el correo al entrar.');
+      if (MODO_DEMO) app.avisar('exito', 'Usuario creado (demostración)');
+      else if (correoEnviado) app.avisar('exito', 'Usuario creado. Le llega un correo para definir su contraseña; con eso entra.');
+      else app.avisar('alerta', 'Usuario creado, pero el correo no salió: al entrar, que use «Primera vez: crear mi contraseña».');
       onGuardado();
     } catch (e) { app.avisar('error', Auth.traducirError(e)); } finally { setGuardando(false); }
   };
@@ -333,7 +407,7 @@ const ModalUsuario = ({ onCerrar, onGuardado }) => {
         <Campo etiqueta="Cédula"><Entrada className="mono" inputMode="numeric" value={f.cedula} onChange={poner('cedula')} /></Campo>
         <Campo etiqueta="Teléfono"><Entrada inputMode="tel" value={f.telefono} onChange={poner('telefono')} /></Campo>
       </div>
-      <Alerta tipo="info" className="mt-4">Los contratistas no se crean aquí: se precargan en Contratos y activan su propia cuenta.</Alerta>
+      <Alerta tipo="info" className="mt-4">Los contratistas no se crean aquí: su cuenta queda lista al crear o importar su contrato en Contratistas y contratos.</Alerta>
     </Modal>
   );
 };
@@ -350,7 +424,7 @@ const PaginaAdminUsuarios = () => {
   };
   return (
     <div>
-      <Encabezado titulo="Usuarios" subtitulo="Revisores, coordinadores y administradores. Los contratistas aparecen cuando activan su cuenta." acciones={<><Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()}>Actualizar</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={() => setNuevo(true)}>Nuevo usuario</Boton></>} />
+      <Encabezado titulo="Usuarios" subtitulo="Revisores, coordinadores y administradores. Los contratistas aparecen al crear o importar su contrato." acciones={<><Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()}>Actualizar</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={() => setNuevo(true)}>Nuevo usuario</Boton></>} />
       <div className="relative mb-3 max-w-md"><Entrada placeholder="Buscar por nombre, correo, cédula o rol" value={texto} onChange={(e) => setTexto(e.target.value)} className="campo-con-icono" aria-label="Buscar" /><Icono nombre="buscar" className="absolute left-3 top-1/2 -translate-y-1/2 texto-3" /></div>
       <Tabla cargando={cargando} filas={lista} vacio={<Vacio icono="usuarios" titulo="Sin usuarios" />} columnas={[
         { titulo: 'Nombre', render: (u) => <span>{u.nombreCompleto}{u.id === app.usuario.id ? <Chip tipo="primario" className="ml-2">Tú</Chip> : null}</span> }, { titulo: 'Correo', clave: 'correo' }, { titulo: 'Cédula', clave: 'cedula', mono: true },

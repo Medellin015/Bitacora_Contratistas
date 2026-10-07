@@ -278,7 +278,7 @@ const PaginaContratos = () => {
           { titulo: 'Contrato', render: (c) => <span className="mono">{c.numero}</span> },
           { titulo: 'Etiqueta', clave: 'etiqueta' },
           { titulo: 'Contratista', render: (c) => (c.info && c.info.contratista && c.info.contratista.nombreCompleto) || '—' },
-          { titulo: 'Cuenta', render: (c) => (c.contratistaUid ? <Chip tipo="exito" icono="check">Activada</Chip> : <Chip tipo="alerta" icono="reloj">Sin activar</Chip>) },
+          { titulo: 'Cuenta', render: (c) => (c.contratistaUid ? <Chip tipo="exito" icono="check">Vinculada</Chip> : <Chip tipo="alerta" icono="reloj">Sin cuenta</Chip>) },
           { titulo: 'Estado', render: (c) => <Chip tipo={c.estado === 'terminado' ? 'neutro' : 'primario'}>{c.estado === 'terminado' ? 'Terminado' : 'Activo'}</Chip> },
           { titulo: 'Edición del contratista', render: (c) => (c.permitirActualizar ? 'Habilitada' : 'Cerrada') },
         ]} acciones={(c) => <Boton tam="xs" icono="derecha" onClick={() => { app.elegirContrato(c.id); app.navegar('#/contrato'); }}>Abrir</Boton>} />

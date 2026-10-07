@@ -65,18 +65,41 @@ bloquea `gstatic.com`), también abre en demostración y lo avisa en el banner.
    Luego completa **Parámetros** (NIT, SMMLV, URL de los flujos de Power
    Automate), los **contratos** y las **Ventanas** del período.
 
+Cada vez que cambie `firestore.rules` hay que volver a publicarlas
+(`firebase deploy --only firestore:rules`, o pegarlas en Firestore → Reglas).
+
+### Cuentas: nadie se registra ni activa nada
+
+- **Contratistas**: su cuenta queda lista al crear o importar su contrato. Si
+  el correo aún no tiene cuenta, se crea y a la persona le llega un correo para
+  definir su contraseña; al abrirlo, el correo queda verificado y entra
+  directo. Si el correo ya tiene cuenta, el contrato se vincula a esa.
+- **Revisores, coordinadores y administradores**: se crean en **Usuarios** y
+  reciben el mismo correo para definir su contraseña.
+- **Primera vez: crear mi contraseña** (en el inicio de sesión) vuelve a enviar
+  ese enlace si el correo no llegó o se venció.
+- **Cuentas con otro rol que también son contratistas** (por ejemplo, el
+  administrador con su propio contrato): el contrato se vincula a esa cuenta y
+  la persona cambia a **Mi vista de contratista** desde el menú de usuario
+  para diligenciar su informe y su cuenta de cobro.
+- Los contratos que se crearon antes sin cuenta muestran **Vincular** en
+  Contratistas y contratos; los que llevan el correo del propio administrador
+  se vinculan solos a su cuenta al entrar.
+
 ### Reglas de Firestore
 
 `firestore.rules` exige sesión con el correo verificado y un perfil activo. Lo
 que no está declarado queda denegado.
 
-- **Contratista**: ve y escribe solo lo de sus contratos. Envía dentro de la
-  ventana y del límite mensual, corrige dentro del plazo y edita sus datos solo
-  cuando el revisor abre la edición.
+- **Contratista** (la cuenta vinculada en el contrato, sea cual sea su rol): ve
+  y escribe solo lo de sus contratos. Envía dentro de la ventana y del límite
+  mensual, corrige dentro del plazo y edita sus datos solo cuando el revisor
+  abre la edición.
 - **Revisor y coordinador**: ven los contratos, envíos y solicitudes donde están
-  asignados. Cambian el estado del envío, siempre con una entrada nueva en el
-  historial.
+  asignados, y el perfil y la firma de quien tienen asignado (van en el Word).
+  Cambian el estado del envío, siempre con una entrada nueva en el historial.
 - **Administrador**: todo, salvo sobrescribir un perfil, contrato o envío
   existente al «crear».
-- **Activación**: el contratista lee su precarga solo si el correo coincide,
+- **Activación de respaldo**: solo si la cuenta ya existía sin perfil cuando se
+  creó el contrato. El contratista lee su precarga solo si el correo coincide,
   crea su propio perfil y reclama los contratos precargados con su cédula.

@@ -307,6 +307,7 @@ input[type="checkbox"].caja, input[type="radio"].caja { width: 18px; height: 18p
 .volver-arriba { position: fixed; right: 1rem; bottom: calc(var(--nav-inferior-alto) + 4.5rem + env(safe-area-inset-bottom)); z-index: 35; width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--borde); background: var(--superficie); box-shadow: var(--sombra-2); display: grid; place-items: center; color: var(--texto-2); }
 @media (min-width: 1024px) { .volver-arriba { bottom: 1.5rem; } }
 .banner-demo { background: var(--acento-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--acento) 40%, transparent); font-size: 0.8rem; padding: 0.35rem 0.75rem; text-align: center; }
+.banner-vista { background: var(--primario-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--primario) 35%, transparent); font-size: 0.8rem; padding: 0.35rem 0.75rem; text-align: center; }
 .firma-vista { max-width: 240px; max-height: 80px; object-fit: contain; background: #fff; border: 1px solid var(--borde); border-radius: 6px; padding: 4px; }
 .editor-json { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.8rem; line-height: 1.45; min-height: 420px; white-space: pre; tab-size: 2; }
 .zona-soltar { border: 2px dashed var(--borde-fuerte); border-radius: var(--radio-g); padding: 1.25rem; text-align: center; color: var(--texto-2); background: var(--superficie-2); }
