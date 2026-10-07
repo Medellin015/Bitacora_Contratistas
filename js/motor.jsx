@@ -335,49 +335,71 @@ const Pregunta = ({ q, valor, onCambio, editable, error, ev, catalogos, subir, c
 
 /* ===== 6. Compuestas enlazadas ===== */
 // «filasDe»: la compuesta tiene una fila por cada fila de otra (p. ej. un pago por planilla).
-// «precargarDe» ('compuesta.campo'): la celda toma el valor de la fila equivalente (p. ej. el
-// aporte obligatorio calculado). Se actualiza mientras siga vacía o igual al valor anterior
-// de su origen; si la persona escribió otro valor, se respeta. `omitir` es la compuesta que
-// se está editando: así una celda vaciada a mano no se vuelve a llenar mientras se escribe.
-const sincronizarEnlaces = (formulario, ctx, antes, despues, omitir) => {
+// «precargarDe»: la celda toma el valor de otra pregunta, sea de la fila equivalente de otra
+// compuesta ('compuesta.campo', p. ej. el aporte obligatorio) o de primer nivel ('pregunta',
+// p. ej. el valor a cobrar). Se actualiza mientras siga vacía o igual al valor anterior de su
+// origen; si la persona escribió otro valor, se respeta. Las celdas que la persona acaba de
+// editar no se tocan: así una celda vaciada a mano no se vuelve a llenar mientras escribe.
+const valorEnlace = (v, tipo) => {
+  if (v === '' || v === null || v === undefined) return null;
+  if (tipo === 'MONEDA' || tipo === 'NUMERO' || tipo === 'PORCENTAJE') {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return tipo === 'MONEDA' ? U.redondear(n, 0) : n;
+  }
+  return String(v);
+};
+const sincronizarEnlaces = (formulario, ctx, antes, despues, editada) => {
   const enlazadas = [];
   (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => {
-    if (q.tipo === 'COMPUESTA' && q.id !== omitir && (q.filasDe || (q.subpreguntas || []).some((s) => s.precargarDe))) enlazadas.push(q);
+    if (q.tipo === 'COMPUESTA' && (q.filasDe || (q.subpreguntas || []).some((s) => s.precargarDe))) enlazadas.push(q);
   }));
   if (!enlazadas.length) return despues;
+  const origen = (ev, ref, i) => { const [a, b] = String(ref).split('.'); return b === undefined ? ev.valor(a) : ev.valorFila(a, i, b); };
+  const filasDe = (R, id) => (Array.isArray(R[id]) ? R[id] : []);
+  const tocada = (q, i, s) => {
+    if (q.id !== editada) return false;
+    const fa = filasDe(antes, q.id)[i], fd = filasDe(despues, q.id)[i];
+    return !!fa && !!fd && valorEnlace(fa[s.id], s.tipo) !== valorEnlace(fd[s.id], s.tipo);
+  };
   const evAntes = Formulas.crearEvaluador({ formulario, respuestas: antes, parametros: ctx.parametros });
-  const evDespues = Formulas.crearEvaluador({ formulario, respuestas: despues, parametros: ctx.parametros });
-  const numero = (v) => { const n = Number(v); return v === '' || v === null || v === undefined || !Number.isFinite(n) ? null : U.redondear(n, 0); };
   let R = despues;
-  enlazadas.forEach((q) => {
-    let filas = Array.isArray(R[q.id]) ? R[q.id] : [];
-    let cambio = false;
-    if (q.filasDe) {
-      const n = Array.isArray(R[q.filasDe]) ? R[q.filasDe].length : 0;
-      if (filas.length !== n) {
-        filas = n > filas.length ? [...filas, ...Array.from({ length: n - filas.length }, () => filaNueva(q, ctx))] : filas.slice(0, n);
-        cambio = true;
-      }
-    }
-    const subs = (q.subpreguntas || []).filter((s) => s.precargarDe);
-    filas = filas.map((f, i) => {
-      let fila = f;
-      subs.forEach((s) => {
-        const [origen, campo] = String(s.precargarDe).split('.');
-        const previo = numero(evAntes.valorFila(origen, i, campo));
-        const nuevo = numero(evDespues.valorFila(origen, i, campo));
-        const actual = f[s.id];
-        const enSincronia = estaVacio(actual) || (previo !== null && numero(actual) === previo);
-        if (enSincronia && nuevo !== null && numero(actual) !== nuevo) {
-          if (fila === f) fila = { ...f };
-          fila[s.id] = nuevo;
+  // Varias pasadas: lo que cambia en una compuesta (la base de la planilla) se propaga a la
+  // que depende de ella (el pago) con el evaluador ya actualizado.
+  for (let pasada = 0; pasada <= enlazadas.length; pasada++) {
+    const evDespues = Formulas.crearEvaluador({ formulario, respuestas: R, parametros: ctx.parametros });
+    let huboCambio = false;
+    enlazadas.forEach((q) => {
+      let filas = filasDe(R, q.id);
+      let cambio = false;
+      if (q.filasDe) {
+        const n = filasDe(R, q.filasDe).length;
+        if (filas.length !== n) {
+          filas = n > filas.length ? [...filas, ...Array.from({ length: n - filas.length }, () => filaNueva(q, ctx))] : filas.slice(0, n);
           cambio = true;
         }
+      }
+      const subs = (q.subpreguntas || []).filter((s) => s.precargarDe);
+      filas = filas.map((f, i) => {
+        let fila = f;
+        subs.forEach((s) => {
+          if (tocada(q, i, s)) return;
+          const previo = valorEnlace(origen(evAntes, s.precargarDe, i), s.tipo);
+          const nuevo = valorEnlace(origen(evDespues, s.precargarDe, i), s.tipo);
+          const actual = valorEnlace(f[s.id], s.tipo);
+          const enSincronia = actual === null || (previo !== null && actual === previo);
+          if (enSincronia && nuevo !== null && actual !== nuevo) {
+            if (fila === f) fila = { ...f };
+            fila[s.id] = nuevo;
+            cambio = true;
+          }
+        });
+        return fila;
       });
-      return fila;
+      if (cambio) { R = { ...R, [q.id]: filas }; huboCambio = true; }
     });
-    if (cambio) R = { ...R, [q.id]: filas };
-  });
+    if (!huboCambio) break;
+  }
   return R;
 };
 

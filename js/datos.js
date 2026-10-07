@@ -18,7 +18,7 @@
   /* ===== 1. Semillas ===== */
   // Copia literal de referencia/formularios-semilla.json (la inserta el ensamblado).
   const KIT = {
-    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. COMPUESTA con filasDe: 'otraCompuesta' tiene una fila por cada fila de esa otra; subpregunta con precargarDe: 'compuesta.campo' toma el valor de la fila equivalente mientras la persona no lo cambie. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
+    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. COMPUESTA con filasDe: 'otraCompuesta' tiene una fila por cada fila de esa otra; subpregunta con precargarDe: 'compuesta.campo' (fila equivalente) o 'pregunta' (primer nivel) toma ese valor mientras la persona no lo cambie. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
     "formularios": [
       {
         "id": "info_contrato",
@@ -577,8 +577,8 @@
         "id": "cuenta_cobro",
         "nombre": "Cuenta de cobro y pago de seguridad social",
         "tipo": "CUENTA_COBRO",
-        "version": 3,
-        "novedad": "Aportes obligatorios y pago realizado quedan en un solo paso, «Seguridad social», y el pago se precarga con lo obligatorio de cada planilla.",
+        "version": 4,
+        "novedad": "Seguridad social en un solo paso: la base de cotización se precarga con el valor a cobrar y el pago con lo obligatorio de cada planilla (si cambias el valor a cobrar, todo se recalcula).",
         "activo": true,
         "plantillaDescarga": "cuenta_cobro_provisional",
         "config": {
@@ -720,6 +720,7 @@
                 "etiqueta": "Planillas que se acreditan",
                 "tipo": "COMPUESTA",
                 "obligatoria": true,
+                "ayuda": "El valor sobre el que cotiza se precarga con el valor a cobrar y se actualiza si lo cambias; escríbelo a mano solo si cotizas sobre otro valor.",
                 "permiteAgregarFilas": true,
                 "minFilas": 1,
                 "maxFilas": 3,
@@ -760,7 +761,8 @@
                     "id": "base",
                     "etiqueta": "Valor sobre el que cotiza",
                     "tipo": "MONEDA",
-                    "obligatoria": true
+                    "obligatoria": true,
+                    "precargarDe": "valorCobrar"
                   },
                   {
                     "id": "ibc",
