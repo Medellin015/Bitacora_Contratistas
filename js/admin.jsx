@@ -513,7 +513,7 @@ const versionBaseDe = (f) => Number(f.versionBase != null ? f.versionBase : f.ve
 const formulariosDesactualizados = (formularios) => SEMILLAS.formularios
   .map((base) => ({ base, actual: formularios.find((f) => f.id === base.id) }))
   .filter(({ base, actual }) => actual && (Number(base.version) > versionBaseDe(actual)
-    || (actual.versionBase == null && !U.igualProfundo(actual.capitulos || [], base.capitulos || []))));
+    || (actual.versionBase == null && Number(base.version) > 1 && !U.igualProfundo(actual.capitulos || [], base.capitulos || []))));
 // Publica la plantilla base como versión nueva. Las respuestas se guardan por id de
 // pregunta, así que los envíos y borradores existentes siguen sirviendo.
 const actualizarABase = async (app, { base, actual }) => {
@@ -524,10 +524,15 @@ const actualizarABase = async (app, { base, actual }) => {
     app.recargarTodo();
   } catch (e) { app.avisar('error', DB.traducirError(e)); }
 };
+// «Mantener mi versión»: el formulario queda como está y se marca al día con la plantilla base.
+const mantenerVersion = async (app, { base, actual }) => {
+  if (!(await app.confirmar({ titulo: `Mantener «${actual.nombre}»`, mensaje: `Tu formulario queda como está (no recibe los cambios de la plantilla base ${base.version}) y el aviso desaparece.`, textoOk: 'Mantener' }))) return;
+  try { await DB.guardarFormulario({ ...actual, versionBase: Number(base.version) }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }
+};
 const AvisosPlantillaBase = ({ className = 'mb-3' }) => {
   const app = useApp();
   return formulariosDesactualizados(app.formularios).map((d) => (
-    <div key={d.base.id} className={`alerta-caja alerta-info items-center flex-wrap ${className}`}><Icono nombre="refrescar" /><div className="flex-1 min-w-0 text-sm"><strong>Hay una versión nueva de «{d.base.nombre}»</strong> (plantilla base {versionBaseDe(d.actual)} → {d.base.version}).{d.base.novedad ? ` ${d.base.novedad}` : ''}</div><Boton tam="sm" variante="primario" icono="refrescar" onClick={() => actualizarABase(app, d)}>Actualizar</Boton></div>
+    <div key={d.base.id} className={`alerta-caja alerta-info items-center flex-wrap ${className}`}><Icono nombre="refrescar" /><div className="flex-1 min-w-0 text-sm"><strong>Hay una versión nueva de «{d.base.nombre}»</strong> ({d.actual.versionBase != null ? `plantilla base ${d.actual.versionBase}` : `tu versión ${d.actual.version || 1}`} → plantilla base {d.base.version}).{d.base.novedad ? ` ${d.base.novedad}` : ''}</div><div className="flex gap-2 flex-wrap"><Boton tam="sm" variante="fantasma" onClick={() => mantenerVersion(app, d)}>Mantener mi versión</Boton><Boton tam="sm" variante="primario" icono="refrescar" onClick={() => actualizarABase(app, d)}>Actualizar</Boton></div></div>
   ));
 };
 const TIPOS_PREGUNTA = ['TEXTO', 'TEXTO_LARGO', 'NUMERO', 'MONEDA', 'PORCENTAJE', 'FECHA', 'SELECCION_UNICA', 'SELECCION_MULTIPLE', 'SI_NO', 'CALCULADA', 'COMPUESTA', 'ARCHIVO', 'URL', 'TELEFONO', 'CORREO', 'SEPARADOR'];
