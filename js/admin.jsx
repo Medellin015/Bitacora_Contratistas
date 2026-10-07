@@ -9,7 +9,7 @@
      3. Importador Excel (plantilla, validación previa, resumen, importación)
      4. Usuarios
      5. Ventanas
-     6. Formularios (editor JSON)
+     6. Formularios (editor JSON + actualizar a la plantilla base)
      7. Catálogos
      8. Parámetros (+ bitácora de notificaciones)
    ============================================================================ */
@@ -33,6 +33,7 @@ const PaginaAdminInicio = () => {
   return (
     <div>
       <Encabezado titulo="Administración" subtitulo={`Resumen de ${U.nombrePeriodo(app.periodo)} · ${app.contratos.length} ${U.plural(app.contratos.length, 'contrato', 'contratos')}`} acciones={<Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()}>Actualizar</Boton>} />
+      <AvisosPlantillaBase className="mb-4" />
       {app.propios.length ? (
         <div className="alerta-caja alerta-info mb-4 items-center flex-wrap"><Icono nombre="usuario" /><div className="flex-1 min-w-0 text-sm"><strong>También eres contratista</strong> ({app.propios.map((c) => c.numero || c.id).join(', ')}): tu informe y tu cuenta de cobro se diligencian desde tu vista de contratista.</div><Boton tam="sm" variante="primario" icono="contrato" onClick={() => app.cambiarVista('contratista')}>Ir a mi vista de contratista</Boton></div>
       ) : null}
@@ -504,6 +505,26 @@ const PaginaAdminVentanas = () => {
 };
 
 /* ===== 6. Formularios ===== */
+// Formularios sembrados cuya plantilla base ya tiene una versión más nueva.
+const formulariosDesactualizados = (formularios) => SEMILLAS.formularios
+  .map((base) => ({ base, actual: formularios.find((f) => f.id === base.id) }))
+  .filter(({ base, actual }) => actual && Number(base.version) > (Number(actual.version) || 1));
+// Publica la plantilla base como versión nueva. Las respuestas se guardan por id de
+// pregunta, así que los envíos y borradores existentes siguen sirviendo.
+const actualizarABase = async (app, { base, actual }) => {
+  if (!(await app.confirmar({ titulo: `Actualizar «${actual.nombre}»`, mensaje: `Se reemplaza por la plantilla base, versión ${base.version}.${base.novedad ? `\n\n${base.novedad}` : ''}\n\nLos envíos ya hechos conservan su contenido y los borradores siguen funcionando. Si habías editado este formulario a mano, esos cambios se pierden.`, textoOk: 'Actualizar' }))) return;
+  try {
+    await DB.publicarVersion({ ...U.clonar(base), activo: actual.activo !== false }, Number(base.version));
+    app.avisar('exito', `«${base.nombre}» quedó en la versión ${base.version}`);
+    app.recargarTodo();
+  } catch (e) { app.avisar('error', DB.traducirError(e)); }
+};
+const AvisosPlantillaBase = ({ className = 'mb-3' }) => {
+  const app = useApp();
+  return formulariosDesactualizados(app.formularios).map((d) => (
+    <div key={d.base.id} className={`alerta-caja alerta-info items-center flex-wrap ${className}`}><Icono nombre="refrescar" /><div className="flex-1 min-w-0 text-sm"><strong>Hay una versión nueva de «{d.base.nombre}»</strong> (versión {d.actual.version || 1} → {d.base.version}).{d.base.novedad ? ` ${d.base.novedad}` : ''}</div><Boton tam="sm" variante="primario" icono="refrescar" onClick={() => actualizarABase(app, d)}>Actualizar</Boton></div>
+  ));
+};
 const TIPOS_PREGUNTA = ['TEXTO', 'TEXTO_LARGO', 'NUMERO', 'MONEDA', 'PORCENTAJE', 'FECHA', 'SELECCION_UNICA', 'SELECCION_MULTIPLE', 'SI_NO', 'CALCULADA', 'COMPUESTA', 'ARCHIVO', 'URL', 'TELEFONO', 'CORREO', 'SEPARADOR'];
 const validarEsquema = (f) => {
   const p = [];
@@ -582,6 +603,7 @@ const PaginaAdminFormularios = () => {
   return (
     <div>
       <Encabezado titulo="Formularios" subtitulo="Esquema JSON (§7): capítulos, preguntas, fórmulas y condiciones. Publicar guarda una copia inmutable de la versión." acciones={<><Boton tam="sm" onClick={async () => { await DB.sembrarBase(); app.avisar('exito', 'Semillas verificadas'); app.recargarTodo(); }}>Cargar semillas faltantes</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={nuevo}>Nuevo</Boton></>} />
+      <AvisosPlantillaBase />
       <Tabla filas={app.formularios} vacio={<Vacio icono="formulario" titulo="Sin formularios" accion={<Boton onClick={async () => { await DB.sembrarBase(); app.recargarTodo(); }}>Cargar semillas</Boton>} />} columnas={[
         { titulo: 'Nombre', render: (f) => <span><strong>{f.nombre}</strong><div className="text-xs texto-3 mono">{f.id}</div></span> }, { titulo: 'Tipo', clave: 'tipo', mono: true }, { titulo: 'Versión', clave: 'version', mono: true },
         { titulo: 'Plantilla', clave: 'plantillaDescarga', mono: true }, { titulo: 'Flujo', render: (f) => (flujoDe(f).length ? flujoDe(f).join(' → ') : 'sin flujo') },
