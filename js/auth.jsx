@@ -1,13 +1,14 @@
 /* ============================================================================
-   9) auth.jsx — acceso: inicio de sesión, activación de cuenta, verificación de
-      correo, recuperación de contraseña y cierre de la activación (perfil + contratos)
+   9) auth.jsx — acceso: inicio de sesión, primera contraseña y recuperación,
+      verificación de correo y activación de respaldo (perfil + contratos).
+      Las cuentas las crea el admin (la del contratista, al crear su contrato):
+      nadie se registra solo.
    Estructura:
      1. Marco visual de las pantallas de acceso
      2. Inicio de sesión (+ usuarios de demostración)
-     3. Activación (crear cuenta con el correo precargado)
-     4. Recuperación de contraseña
-     5. Verificación de correo
-     6. Completar activación: preRegistro → usuarios/{uid} → reclamar contratos
+     3. Primera contraseña y recuperación (enlace por correo)
+     4. Verificación de correo (cuentas creadas en la consola de Firebase)
+     5. Activación de respaldo: preRegistro → usuarios/{uid} → reclamar contratos
    ============================================================================ */
 
 /* ===== 1. Marco ===== */
@@ -55,8 +56,7 @@ const MarcoAcceso = ({ children, titulo, subtitulo }) => {
 /* ===== 2. Inicio de sesión ===== */
 const PantallaAcceso = () => {
   const [vista, setVista] = useState('login');
-  if (vista === 'activar') return <PantallaActivar volver={() => setVista('login')} />;
-  if (vista === 'recuperar') return <PantallaRecuperar volver={() => setVista('login')} />;
+  if (vista === 'primera' || vista === 'recuperar') return <PantallaRecuperar primeraVez={vista === 'primera'} volver={() => setVista('login')} />;
   return <PantallaLogin irA={setVista} />;
 };
 const PantallaLogin = ({ irA }) => {
@@ -96,59 +96,17 @@ const PantallaLogin = ({ irA }) => {
         <Boton tipo="submit" variante="primario" cargando={cargando} icono="flecha">Entrar</Boton>
       </form>
       <div className="flex flex-col sm:flex-row gap-2 justify-between mt-5 text-sm">
-        <button type="button" className="underline" onClick={() => irA('activar')}>Soy contratista nuevo: activar mi cuenta</button>
+        <button type="button" className="underline" onClick={() => irA('primera')}>Primera vez: crear mi contraseña</button>
         <button type="button" className="underline texto-2" onClick={() => irA('recuperar')}>Olvidé mi contraseña</button>
       </div>
     </MarcoAcceso>
   );
 };
 
-/* ===== 3. Activación ===== */
-const PantallaActivar = ({ volver }) => {
-  const [f, setF] = useState({ cedula: '', correo: '', clave: '', clave2: '', nombres: '', apellidos: '', telefono: '' });
-  const [cargando, setCargando] = useState(false);
-  const [error, setError] = useState('');
-  const poner = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const activar = async (e) => {
-    e.preventDefault();
-    setError('');
-    const cedula = U.soloDigitos(f.cedula);
-    if (cedula.length < 5) { setError('Escribe tu cédula (solo números).'); return; }
-    if (!U.esCorreo(f.correo)) { setError('Escribe el correo que te precargó la entidad.'); return; }
-    if (!f.nombres.trim() || !f.apellidos.trim()) { setError('Escribe tus nombres y apellidos.'); return; }
-    if (f.clave.length < 6) { setError('La contraseña debe tener al menos 6 caracteres.'); return; }
-    if (f.clave !== f.clave2) { setError('Las contraseñas no coinciden.'); return; }
-    setCargando(true);
-    try {
-      // Se guarda antes de registrar: al volver del correo de verificación se retoma la activación.
-      try { localStorage.setItem('bitacora.activacion', JSON.stringify({ cedula, nombres: f.nombres.trim(), apellidos: f.apellidos.trim(), telefono: f.telefono.trim() })); } catch (err) { /* sin localStorage */ }
-      await Auth.registrar(f.correo, f.clave);
-    } catch (err) { setError(Auth.traducirError(err)); } finally { setCargando(false); }
-  };
-  return (
-    <MarcoAcceso titulo="Activar mi cuenta" subtitulo="Solo para contratistas precargados por la entidad. Usa el mismo correo que les diste.">
-      <form onSubmit={activar} className="grid gap-4" noValidate>
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Campo etiqueta="Cédula" id="act-cedula" obligatoria><Entrada id="act-cedula" inputMode="numeric" autoComplete="off" className="mono" value={f.cedula} onChange={poner('cedula')} /></Campo>
-          <Campo etiqueta="Teléfono" id="act-tel"><Entrada id="act-tel" inputMode="tel" autoComplete="tel" value={f.telefono} onChange={poner('telefono')} /></Campo>
-          <Campo etiqueta="Nombres" id="act-nombres" obligatoria><Entrada id="act-nombres" autoComplete="given-name" value={f.nombres} onChange={poner('nombres')} /></Campo>
-          <Campo etiqueta="Apellidos" id="act-apellidos" obligatoria><Entrada id="act-apellidos" autoComplete="family-name" value={f.apellidos} onChange={poner('apellidos')} /></Campo>
-        </div>
-        <Campo etiqueta="Correo precargado" id="act-correo" obligatoria><Entrada id="act-correo" type="email" inputMode="email" autoComplete="username" value={f.correo} onChange={poner('correo')} /></Campo>
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Campo etiqueta="Contraseña" id="act-clave" obligatoria ayuda="Mínimo 6 caracteres."><Entrada id="act-clave" type="password" autoComplete="new-password" value={f.clave} onChange={poner('clave')} /></Campo>
-          <Campo etiqueta="Repetir contraseña" id="act-clave2" obligatoria><Entrada id="act-clave2" type="password" autoComplete="new-password" value={f.clave2} onChange={poner('clave2')} /></Campo>
-        </div>
-        {error ? <Alerta tipo="error">{error}</Alerta> : null}
-        <Boton tipo="submit" variante="primario" cargando={cargando} icono="flecha">Crear cuenta y verificar correo</Boton>
-        <button type="button" className="underline text-sm texto-2 justify-self-start" onClick={volver}>Volver a iniciar sesión</button>
-      </form>
-    </MarcoAcceso>
-  );
-};
-
-/* ===== 4. Recuperación ===== */
-const PantallaRecuperar = ({ volver }) => {
+/* ===== 3. Primera contraseña y recuperación ===== */
+// El mismo enlace sirve para crear la contraseña la primera vez (cuenta creada por el admin)
+// y para recuperarla; al abrirlo, el correo queda verificado.
+const PantallaRecuperar = ({ volver, primeraVez }) => {
   const [correo, setCorreo] = useState('');
   const [estado, setEstado] = useState({ cargando: false, listo: false, error: '' });
   const enviar = async (e) => {
@@ -159,8 +117,8 @@ const PantallaRecuperar = ({ volver }) => {
     catch (err) { setEstado({ cargando: false, listo: false, error: Auth.traducirError(err) }); }
   };
   return (
-    <MarcoAcceso titulo="Recuperar contraseña" subtitulo="Te enviamos un enlace para definir una contraseña nueva.">
-      {estado.listo ? <Alerta tipo="exito">Si el correo existe, recibirás el enlace en unos minutos. Revisa también la carpeta de no deseados.</Alerta> : (
+    <MarcoAcceso titulo={primeraVez ? 'Crear mi contraseña' : 'Recuperar contraseña'} subtitulo={primeraVez ? 'Escribe el correo con el que la entidad creó tu cuenta y te enviamos el enlace para crear tu contraseña.' : 'Te enviamos un enlace para definir una contraseña nueva.'}>
+      {estado.listo ? <Alerta tipo="exito">Si el correo tiene cuenta, recibirás el enlace en unos minutos (revisa también la carpeta de no deseados). Ábrelo, define tu contraseña y vuelve a iniciar sesión.</Alerta> : (
         <form onSubmit={enviar} className="grid gap-4" noValidate>
           <Campo etiqueta="Correo" id="rec-correo"><Entrada id="rec-correo" type="email" inputMode="email" autoComplete="username" value={correo} onChange={(e) => setCorreo(e.target.value)} /></Campo>
           {estado.error ? <Alerta tipo="error">{estado.error}</Alerta> : null}
@@ -172,22 +130,22 @@ const PantallaRecuperar = ({ volver }) => {
   );
 };
 
-/* ===== 5. Verificación de correo ===== */
+/* ===== 4. Verificación de correo ===== */
 const PantallaVerificar = ({ sesion, alVerificar }) => {
   const app = useApp();
   const [cargando, setCargando] = useState(false);
   const [mensaje, setMensaje] = useState('');
-  const reenviar = async () => { setCargando(true); try { await Auth.enviarVerificacion(); setMensaje('Correo reenviado.'); } catch (e) { setMensaje(Auth.traducirError(e)); } finally { setCargando(false); } };
+  const reenviar = async () => { setCargando(true); try { await Auth.enviarVerificacion(); setMensaje('Enlace enviado: revisa tu correo (también no deseados).'); } catch (e) { setMensaje(Auth.traducirError(e)); } finally { setCargando(false); } };
   const comprobar = async () => {
     setCargando(true);
     try { const u = await Auth.recargar(); if (u && u.emailVerified) alVerificar(u); else setMensaje('Todavía no aparece verificado. Abre el enlace del correo y vuelve a intentar.'); }
     catch (e) { setMensaje(Auth.traducirError(e)); } finally { setCargando(false); }
   };
   return (
-    <MarcoAcceso titulo="Verifica tu correo" subtitulo={`Enviamos un enlace a ${sesion.email}. Ábrelo y luego pulsa «Ya verifiqué».`}>
+    <MarcoAcceso titulo="Verifica tu correo" subtitulo={`${sesion.email} aún no está verificado. Pide el enlace, ábrelo desde tu correo y luego pulsa «Ya verifiqué».`}>
       <div className="grid gap-3">
         <Boton variante="primario" icono="check" cargando={cargando} onClick={comprobar}>Ya verifiqué</Boton>
-        <Boton icono="correo" cargando={cargando} onClick={reenviar}>Reenviar correo</Boton>
+        <Boton icono="correo" cargando={cargando} onClick={reenviar}>Enviar enlace de verificación</Boton>
         <Boton variante="fantasma" icono="salir" onClick={() => app.cerrarSesion()}>Cerrar sesión</Boton>
         {mensaje ? <Alerta tipo="info">{mensaje}</Alerta> : null}
       </div>
@@ -195,14 +153,13 @@ const PantallaVerificar = ({ sesion, alVerificar }) => {
   );
 };
 
-/* ===== 6. Completar activación ===== */
-// El correo ya está verificado pero no existe usuarios/{uid}: se lee preRegistro
-// (la regla solo lo permite si el correo coincide), se crea el perfil y DESPUÉS
-// se reclaman los contratos uno por uno.
+/* ===== 5. Activación de respaldo ===== */
+// Solo si la cuenta ya existía (sin perfil) cuando el admin creó el contrato: con el correo
+// verificado se lee preRegistro (la regla solo lo permite si el correo coincide), se crea
+// el perfil y DESPUÉS se reclaman los contratos uno por uno.
 const PantallaCompletarActivacion = ({ sesion, alTerminar }) => {
   const app = useApp();
-  const guardado = useMemo(() => { try { return JSON.parse(localStorage.getItem('bitacora.activacion') || 'null') || {}; } catch (e) { return {}; } }, []);
-  const [f, setF] = useState({ cedula: guardado.cedula || '', nombres: guardado.nombres || '', apellidos: guardado.apellidos || '', telefono: guardado.telefono || '' });
+  const [f, setF] = useState({ cedula: '', nombres: '', apellidos: '', telefono: '' });
   const [estado, setEstado] = useState({ cargando: false, error: '', pasos: [] });
   const poner = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const paso = (t) => setEstado((s) => ({ ...s, pasos: [...s.pasos, t] }));
@@ -229,7 +186,6 @@ const PantallaCompletarActivacion = ({ sesion, alTerminar }) => {
         catch (err) { console.warn('No se pudo reclamar', id, err); paso(`Contrato ${id}: ${DB.traducirError(err)}`); }
       }
       try { await DB.marcarActivado(cedula, sesion.uid); } catch (err) { console.warn('No se pudo marcar el preRegistro', err); }
-      try { localStorage.removeItem('bitacora.activacion'); } catch (err) { /* nada */ }
       app.avisar('exito', `Cuenta activada${reclamados ? ` · ${reclamados} ${U.plural(reclamados, 'contrato vinculado', 'contratos vinculados')}` : ''}`);
       alTerminar();
     } catch (err) { setEstado((s) => ({ ...s, cargando: false, error: DB.traducirError(err) })); }

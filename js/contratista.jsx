@@ -122,7 +122,7 @@ const PaginaInicioContratista = () => {
     }
     return { envios, solicitudes, borradores };
   }, [contrato && contrato.id, app.periodo, app.usuario.id]);
-  if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador te precargue un contrato aparecerá aquí. Si ya activaste tu cuenta y no lo ves, escribe al administrador." />;
+  if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
   const envios = (datos && datos.envios) || [];
   const solicitudes = (datos && datos.solicitudes) || [];
   const borradores = (datos && datos.borradores) || {};
@@ -399,7 +399,7 @@ const VistaInfoContrato = ({ contrato }) => {
     <div className="grid gap-4">
       {(f.capitulos || []).map((cap) => (
         <div key={cap.id} className="tarjeta">
-          <div className="tarjeta-cabecera"><h3>{cap.nombre}</h3>{cap.id === 'contratista' && contrato.contratistaUid ? <Chip tipo="exito" icono="check">Cuenta activada</Chip> : null}{cap.id === 'contratista' && !contrato.contratistaUid ? <Chip tipo="alerta" icono="reloj">Sin activar</Chip> : null}</div>
+          <div className="tarjeta-cabecera"><h3>{cap.nombre}</h3>{cap.id === 'contratista' && contrato.contratistaUid ? <Chip tipo="exito" icono="check">Cuenta vinculada</Chip> : null}{cap.id === 'contratista' && !contrato.contratistaUid ? <Chip tipo="alerta" icono="reloj">Sin cuenta</Chip> : null}</div>
           <div className="tarjeta-cuerpo">
             <ListaDatos items={(cap.preguntas || []).filter((q) => q.tipo !== 'SEPARADOR').map((q) => {
               if (q.tipo === 'COMPUESTA') {
@@ -474,7 +474,9 @@ const PaginaContrato = () => {
       {app.rol === 'contratista' && !contrato.permitirActualizar ? <Alerta tipo="info" className="mb-4">La edición de tus datos está cerrada. Si algo cambió, crea una solicitud de actualización y el revisor la habilitará.</Alerta> : null}
       <Pestanas activa={pestana} onCambio={setPestana} lista={[{ id: 'info', etiqueta: 'Información del contrato', icono: 'contrato' }, { id: 'envios', etiqueta: 'Envíos del contrato', icono: 'envios', contador: 0 }, { id: 'cambios', etiqueta: 'Cambios', icono: 'reloj' }]} />
       <div className="mt-4">
-        {pestana === 'info' && app.rol === 'admin' && contrato.contratistaUid ? (
+        {pestana === 'info' && app.rol === 'admin' && contrato.contratistaUid === app.usuario.id ? (
+          <div className="alerta-caja alerta-info mb-4 items-center flex-wrap"><Icono nombre="usuario" /><div className="flex-1 min-w-0 text-sm"><strong>Este contrato es tuyo.</strong> Tu informe y tu cuenta de cobro se diligencian desde tu vista de contratista.</div><Boton tam="xs" variante="primario" icono="contrato" onClick={() => app.cambiarVista('contratista')}>Ir a mi vista de contratista</Boton></div>
+        ) : pestana === 'info' && app.rol === 'admin' && contrato.contratistaUid ? (
           <div className="alerta-caja alerta-info mb-4 items-center flex-wrap"><Icono nombre="escudo" /><div className="flex-1 min-w-0 text-sm"><strong>Diligenciar en nombre del contratista</strong> ({U.nombrePeriodo(app.periodo)}): queda auditado con tu usuario en el historial.</div><div className="flex gap-2 flex-wrap">{app.formularios.filter((f) => f.activo && f.tipo !== 'INFO_CONTRATO').map((f) => <Boton key={f.id} tam="xs" icono="editar" onClick={() => app.navegar(`#/formulario/${f.id}?modo=nuevo`)}>{f.nombre}</Boton>)}</div></div>
         ) : null}
         {pestana === 'info' ? <VistaInfoContrato contrato={contrato} /> : null}

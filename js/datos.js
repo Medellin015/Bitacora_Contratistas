@@ -1139,16 +1139,23 @@
   };
   const resumenUsuario = (u) => (u ? { uid: u.uid, email: U.normalizarCorreo(u.email), emailVerified: !!u.emailVerified } : null);
 
+  // Enlace para definir (o recuperar) la contraseña; al abrirlo, el correo queda verificado.
+  // Con url, la página de Firebase ofrece «Continuar» de vuelta a la app; si ese dominio no
+  // está autorizado en Authentication, el correo sale igual, sin el botón.
+  const enviarEnlaceClave = async (auth, correo) => {
+    const url = `${raiz.location.origin}${raiz.location.pathname}`;
+    try { await auth.sendPasswordResetEmail(U.normalizarCorreo(correo), { url }); }
+    catch (e) {
+      if (!/continue-uri|argument-error/.test(String(e && e.code))) throw e;
+      await auth.sendPasswordResetEmail(U.normalizarCorreo(correo));
+    }
+  };
+
   const crearAuthFirebase = (auth) => ({
     modoDemo: false,
     alCambiar: (cb) => auth.onAuthStateChanged((u) => cb(resumenUsuario(u))),
     actual: () => resumenUsuario(auth.currentUser),
     iniciarSesion: async (correo, clave) => resumenUsuario((await auth.signInWithEmailAndPassword(U.normalizarCorreo(correo), clave)).user),
-    registrar: async (correo, clave) => {
-      const cred = await auth.createUserWithEmailAndPassword(U.normalizarCorreo(correo), clave);
-      try { await cred.user.sendEmailVerification(); } catch (e) { console.warn('No se pudo enviar la verificación:', e); }
-      return resumenUsuario(cred.user);
-    },
     enviarVerificacion: () => (auth.currentUser ? auth.currentUser.sendEmailVerification() : Promise.resolve()),
     // reload() actualiza el usuario en memoria, pero el token sigue diciendo email_verified: false
     // y las reglas de Firestore leen el token: sin renovarlo, tras verificar el correo todo se niega.
@@ -1156,12 +1163,14 @@
       if (auth.currentUser) { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); }
       return resumenUsuario(auth.currentUser);
     },
-    recuperarClave: (correo) => auth.sendPasswordResetEmail(U.normalizarCorreo(correo)),
+    recuperarClave: (correo) => enviarEnlaceClave(auth, correo),
     cambiarClave: (nueva) => auth.currentUser.updatePassword(nueva),
     cerrarSesion: () => auth.signOut(),
     idToken: () => (auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve('')),
-    // El admin crea cuentas de revisores/coordinadores en una app secundaria para
-    // no cerrar su propia sesión; la persona define su contraseña con el correo de recuperación.
+    // El admin crea las cuentas (la del contratista al crear su contrato; revisores y
+    // coordinadores en Usuarios) en una app secundaria para no cerrar su propia sesión.
+    // La persona define su contraseña con el enlace del correo, que además verifica el correo.
+    // Si el correo no sale, la cuenta igual queda creada: la persona pide el enlace al entrar.
     crearCuentaSecundaria: async (correo, claveTemporal) => {
       const nombre = 'secundaria';
       const app2 = firebase.apps.find((a) => a.name === nombre) || firebase.initializeApp(raiz.firebaseConfig, nombre);
@@ -1169,8 +1178,9 @@
       const cred = await auth2.createUserWithEmailAndPassword(U.normalizarCorreo(correo), claveTemporal);
       const uid = cred.user.uid;
       await auth2.signOut();
-      await auth.sendPasswordResetEmail(U.normalizarCorreo(correo));
-      return uid;
+      let correoEnviado = true;
+      try { await enviarEnlaceClave(auth, correo); } catch (e) { correoEnviado = false; console.warn('No se pudo enviar el enlace para definir la contraseña:', e); }
+      return { uid, correoEnviado };
     },
     traducirError,
   });
@@ -1198,14 +1208,13 @@
         if (!u) { const e = new Error('No existe una cuenta con ese correo (modo demostración).'); e.code = 'auth/user-not-found'; throw e; }
         return auth.entrarDemo(u.uid);
       },
-      registrar: async (correo) => { actual = { uid: `demo-${U.idAleatorio().slice(0, 8)}`, email: U.normalizarCorreo(correo), emailVerified: true }; avisar(); return actual; },
       enviarVerificacion: async () => {},
       recargar: async () => actual,
       recuperarClave: async () => {},
       cambiarClave: async () => {},
       cerrarSesion: async () => { actual = null; avisar(); },
       idToken: async () => 'token-demo',
-      crearCuentaSecundaria: async () => `demo-${U.idAleatorio().slice(0, 8)}`,
+      crearCuentaSecundaria: async () => ({ uid: `demo-${U.idAleatorio().slice(0, 8)}`, correoEnviado: true }),
       traducirError,
     };
     return auth;

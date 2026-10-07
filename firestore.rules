@@ -2,9 +2,12 @@ rules_version = '2';
 // ============================================================================
 // Reglas de Firestore — Bitácora Contratistas
 // Roles en usuarios/{uid}.rol: contratista · revisor · coordinador · admin.
+// Ser contratista de un contrato no depende del rol: el dueño es quien figura en
+// contratistaUid (el admin vincula la cuenta al crear el contrato), así un admin
+// o un revisor también pueden diligenciar sus propios contratos.
 // Toda lectura y escritura exige sesión con el correo verificado y un perfil
-// activo, salvo la activación del contratista, que lee su precarga y crea su
-// perfil antes de tenerlo. Todo lo que no se declara aquí queda denegado.
+// activo, salvo la activación de respaldo del contratista, que lee su precarga y
+// crea su perfil antes de tenerlo. Todo lo que no se declara aquí queda denegado.
 // Estructura:
 //   1. Sesión y rol
 //   2. Contratos: dueño y equipo asignado
@@ -42,7 +45,8 @@ service cloud.firestore {
     function rutaContrato(id) { return /databases/$(database)/documents/contratos/$(id); }
     function contrato(id) { return get(rutaContrato(id)).data; }
     // d: contrato, envío o solicitud (los tres guardan contratistaUid, revisores y coordinadores).
-    function esDuenoDoc(d) { return esContratista() && d.contratistaUid == request.auth.uid; }
+    // Dueño: la cuenta vinculada como contratista, tenga el rol que tenga.
+    function esDuenoDoc(d) { return activo() && d.contratistaUid == request.auth.uid; }
     function esEquipoDoc(d) {
       return esEquipo() && (request.auth.uid in d.revisores || request.auth.uid in d.coordinadores);
     }
@@ -80,7 +84,12 @@ service cloud.firestore {
         && request.resource.data.revisores == pre.get('revisores', [])
         && request.resource.data.coordinadores == pre.get('coordinadores', []);
     }
-    // Activación: el contratista crea su propio perfil con su correo y su precarga.
+    // Revisor o coordinador asignado a la persona (su perfil guarda el equipo de su contrato).
+    function equipoDelPerfil(p) {
+      return esEquipo() && (request.auth.uid in p.get('revisores', []) || request.auth.uid in p.get('coordinadores', []));
+    }
+    // Activación de respaldo: el contratista crea su propio perfil con su correo y su precarga
+    // (solo si su cuenta ya existía cuando el admin creó el contrato).
     function activacionPropia(uid) {
       return verificado() && request.auth.uid == uid
         && request.resource.data.rol == 'contratista'
@@ -92,10 +101,12 @@ service cloud.firestore {
 
     match /usuarios/{uid} {
       // Cada quien lee su perfil, también antes de que exista (así la app sabe que falta
-      // la activación). El admin lee todos; el equipo, los de contratistas (van en el Word).
+      // la activación). El admin lee todos; el equipo, los de contratistas (van en el Word)
+      // y el de quien tiene asignado aunque su rol sea otro.
       allow get: if (verificado() && request.auth.uid == uid)
         || esAdmin()
-        || (esEquipo() && resource.data.rol == 'contratista');
+        || (esEquipo() && resource.data.rol == 'contratista')
+        || equipoDelPerfil(resource.data);
       allow list: if esAdmin();
       allow create: if esAdmin() || activacionPropia(uid);
       // El usuario solo cambia su teléfono; el admin, todo menos la fecha de creación.
@@ -107,7 +118,8 @@ service cloud.firestore {
       match /privado/{documento} {
         allow read: if (activo() && request.auth.uid == uid)
           || esAdmin()
-          || (esEquipo() && get(rutaUsuario(uid)).data.rol == 'contratista');
+          || (esEquipo() && get(rutaUsuario(uid)).data.rol == 'contratista')
+          || equipoDelPerfil(get(rutaUsuario(uid)).data);
         allow write: if activo() && request.auth.uid == uid;
       }
     }
@@ -138,7 +150,7 @@ service cloud.firestore {
             && resource.data.permitirActualizar == true
             && soloCambia(['info', 'actualizadoEn'])
             && request.resource.data.info.diff(resource.data.info).affectedKeys().hasOnly(['contratista']))
-        // Activación: reclama el contrato precargado con su cédula y su correo.
+        // Activación de respaldo: reclama el contrato precargado con su cédula y su correo.
         || (esContratista()
             && resource.data.contratistaUid == null
             && resource.data.cedulaContratista == perfil().cedula
@@ -181,7 +193,7 @@ service cloud.firestore {
       let d = request.resource.data;
       let c = contrato(d.contratoId);
       let f = get(rutaFormulario(d.formularioId)).data;
-      return esContratista()
+      return activo()
         && c.contratistaUid == request.auth.uid
         && d.contratistaUid == request.auth.uid
         && d.revisores == c.revisores
@@ -235,7 +247,7 @@ service cloud.firestore {
     function solicitudPropia() {
       let d = request.resource.data;
       let c = contrato(d.contratoId);
-      return esContratista()
+      return activo()
         && c.contratistaUid == request.auth.uid
         && d.contratistaUid == request.auth.uid
         && d.revisores == c.revisores

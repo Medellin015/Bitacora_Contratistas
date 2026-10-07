@@ -5,7 +5,7 @@
    Estructura:
      1. Menús por rol
      2. Selectores globales (contrato y período) y chip de ventana
-     3. Barra superior y menú de usuario
+     3. Barra superior y menú de usuario (+ cambio a la vista de contratista)
      4. Barra lateral y navegación inferior
      5. Shell
    ============================================================================ */
@@ -92,6 +92,18 @@ const ChipVentana = ({ enBanner }) => {
 };
 
 /* ===== 3. Barra superior ===== */
+// Una cuenta con otro rol que también es contratista (p. ej. el admin con su propio contrato)
+// alterna entre su vista y la de contratista.
+const OpcionVista = ({ alElegir, className, enMenu }) => {
+  const app = useApp();
+  if (!app.propios.length) return null;
+  const aContratista = app.vista !== 'contratista';
+  return (
+    <button type="button" role={enMenu ? 'menuitem' : undefined} className={className} onClick={() => { alElegir(); app.cambiarVista(aContratista ? 'contratista' : ''); }}>
+      <Icono nombre={aContratista ? 'contrato' : 'admin'} /> {aContratista ? 'Mi vista de contratista' : `Volver a ${U.ROLES[app.rolCuenta].toLowerCase()}`}
+    </button>
+  );
+};
 const MenuUsuario = () => {
   const app = useApp();
   const [abierto, setAbierto] = useState(false);
@@ -104,7 +116,8 @@ const MenuUsuario = () => {
         <Icono nombre="abajo" tam={14} className="texto-3 hidden md:inline" />
       </button>
       <MenuFlotante abierto={abierto} onCerrar={() => setAbierto(false)}>
-        <div className="px-3 py-2 text-xs texto-2 border-b mb-1" style={{ borderColor: 'var(--borde)' }}><div className="font-semibold" style={{ color: 'var(--texto)' }}>{u.nombreCompleto}</div><div>{U.ROLES[app.rol]} · {u.correo}</div></div>
+        <div className="px-3 py-2 text-xs texto-2 border-b mb-1" style={{ borderColor: 'var(--borde)' }}><div className="font-semibold" style={{ color: 'var(--texto)' }}>{u.nombreCompleto}</div><div>{app.vista ? `${U.ROLES[app.rolCuenta]} · vista de contratista` : U.ROLES[app.rol]} · {u.correo}</div></div>
+        <OpcionVista enMenu alElegir={() => setAbierto(false)} />
         <button type="button" role="menuitem" onClick={() => { setAbierto(false); app.navegar('#/perfil'); }}><Icono nombre="usuario" /> Mi perfil y firma</button>
         <button type="button" role="menuitem" onClick={() => { setAbierto(false); app.alternarTema(); }}><Icono nombre={app.tema === 'oscuro' ? 'sol' : 'luna'} /> Tema {app.tema === 'oscuro' ? 'claro' : 'oscuro'}</button>
         <button type="button" role="menuitem" onClick={() => { setAbierto(false); app.recargarTodo(); }}><Icono nombre="refrescar" /> Actualizar datos</button>
@@ -168,6 +181,7 @@ const NavInferior = () => {
         <Modal titulo="Más opciones" onCerrar={() => setMas(false)}>
           <div className="grid gap-1">
             {resto.map((n) => <button type="button" key={n.id} className={`nav-enlace ${activo === n.id ? 'activo' : ''}`} onClick={() => { setMas(false); app.navegar(n.ruta); }}><Icono nombre={n.icono} /> {n.etiqueta}</button>)}
+            <OpcionVista className="nav-enlace" alElegir={() => setMas(false)} />
             <button type="button" className="nav-enlace" onClick={() => { setMas(false); app.navegar('#/perfil'); }}><Icono nombre="usuario" /> Mi perfil y firma</button>
             <button type="button" className="nav-enlace" onClick={() => { setMas(false); app.alternarTema(); }}><Icono nombre={app.tema === 'oscuro' ? 'sol' : 'luna'} /> Tema {app.tema === 'oscuro' ? 'claro' : 'oscuro'}</button>
             <button type="button" className="nav-enlace" onClick={() => { setMas(false); app.cerrarSesion(); }}><Icono nombre="salir" /> Cerrar sesión</button>
@@ -179,9 +193,15 @@ const NavInferior = () => {
 };
 
 /* ===== 5. Shell ===== */
+const BannerVista = () => {
+  const app = useApp();
+  if (app.vista !== 'contratista') return null;
+  return <div className="banner-vista">Estás en tu <strong>vista de contratista</strong> · <button type="button" className="underline" onClick={() => app.cambiarVista('')}>Volver a {U.ROLES[app.rolCuenta].toLowerCase()}</button></div>;
+};
 const Shell = ({ children }) => (
   <div className="app">
     {MODO_DEMO ? <div className="banner-demo"><strong>Modo demostración</strong> · datos ficticios en este navegador · los correos y archivos se simulan</div> : null}
+    <BannerVista />
     <BarraSuperior />
     <div className="app-cuerpo">
       <BarraLateral />
