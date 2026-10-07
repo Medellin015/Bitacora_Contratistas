@@ -252,6 +252,7 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
         <ControlPregunta q={s} valor={filas[i][s.id]} onCambio={(v) => cambiarCelda(i, s.id, v)} editable={celdaEditable(s)} idCampo={idCampo} invalido={!!err}
           ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} />
         {traer && s.precargar === 'ultimoEnvio' && celdaEditable(s) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => traer(q.id, i, s.id)}>Traer del mes anterior</button> : null}
+        {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={() => onCambio(filas.map((f, j) => (j === i ? conManuales(f, manualesDe(f).filter((x) => x !== s.id)) : f)))}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
       </Campo>
     );
   };
@@ -335,68 +336,116 @@ const Pregunta = ({ q, valor, onCambio, editable, error, ev, catalogos, subir, c
 
 /* ===== 6. Compuestas enlazadas ===== */
 // «filasDe»: la compuesta tiene una fila por cada fila de otra (p. ej. un pago por planilla).
-// «precargarDe»: la celda toma el valor de otra pregunta, sea de la fila equivalente de otra
+// «precargarDe»: la celda toma el valor de otra pregunta, de la fila equivalente de otra
 // compuesta ('compuesta.campo', p. ej. el aporte obligatorio) o de primer nivel ('pregunta',
-// p. ej. el valor a cobrar). Se actualiza mientras siga vacía o igual al valor anterior de su
-// origen; si la persona escribió otro valor, se respeta. Las celdas que la persona acaba de
-// editar no se tocan: así una celda vaciada a mano no se vuelve a llenar mientras escribe.
-const valorEnlace = (v, tipo) => {
+// p. ej. el valor a cobrar), y lo sigue mientras la persona no escriba otro. Cada fila guarda
+// en `_manual` los campos escritos a mano (los que difieren de su origen): esos no se tocan
+// hasta que la persona use «volver al valor precargado» o escriba el mismo valor del origen.
+const MARCA_MANUAL = '_manual';
+const valorEnlace = (v, s) => {
   if (v === '' || v === null || v === undefined) return null;
-  if (tipo === 'MONEDA' || tipo === 'NUMERO' || tipo === 'PORCENTAJE') {
+  if (s.tipo === 'MONEDA' || s.tipo === 'NUMERO' || s.tipo === 'PORCENTAJE') {
     const n = Number(v);
     if (!Number.isFinite(n)) return null;
-    return tipo === 'MONEDA' ? U.redondear(n, 0) : n;
+    return U.redondear(n, s.decimales != null ? s.decimales : (s.tipo === 'MONEDA' ? 0 : 2));
   }
   return String(v);
 };
-const sincronizarEnlaces = (formulario, ctx, antes, despues, editada) => {
-  const enlazadas = [];
+const origenEnlace = (ev, ref, i) => { const [a, b] = String(ref).split('.'); return b === undefined ? ev.valor(a) : ev.valorFila(a, i, b); };
+const compuestasEnlazadas = (formulario) => {
+  const lista = [];
   (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => {
-    if (q.tipo === 'COMPUESTA' && (q.filasDe || (q.subpreguntas || []).some((s) => s.precargarDe))) enlazadas.push(q);
+    if (q.tipo === 'COMPUESTA' && (q.filasDe || (q.subpreguntas || []).some(esEnlazada))) lista.push(q);
   }));
+  return lista;
+};
+// Solo se precargan valores simples (no archivos, listas ni calculadas).
+const TIPOS_SIN_PRECARGA = ['ARCHIVO', 'SELECCION_MULTIPLE', 'COMPUESTA', 'CALCULADA', 'SEPARADOR'];
+const esEnlazada = (s) => !!s.precargarDe && !TIPOS_SIN_PRECARGA.includes(s.tipo);
+const manualesDe = (fila) => (fila && Array.isArray(fila[MARCA_MANUAL]) ? fila[MARCA_MANUAL] : []);
+const conManuales = (fila, lista) => ({ ...fila, [MARCA_MANUAL]: U.unicos(lista) });
+// opciones: { editada: id de la pregunta que cambió la persona, inicial: true al abrir datos guardados }.
+const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
+  const { editada, inicial } = typeof opciones === 'string' ? { editada: opciones } : (opciones || {});
+  const enlazadas = compuestasEnlazadas(formulario);
   if (!enlazadas.length) return despues;
-  const origen = (ev, ref, i) => { const [a, b] = String(ref).split('.'); return b === undefined ? ev.valor(a) : ev.valorFila(a, i, b); };
   const filasDe = (R, id) => (Array.isArray(R[id]) ? R[id] : []);
-  const tocada = (q, i, s) => {
-    if (q.id !== editada) return false;
-    const fa = filasDe(antes, q.id)[i], fd = filasDe(despues, q.id)[i];
-    return !!fa && !!fd && valorEnlace(fa[s.id], s.tipo) !== valorEnlace(fd[s.id], s.tipo);
-  };
-  const evAntes = Formulas.crearEvaluador({ formulario, respuestas: antes, parametros: ctx.parametros });
+  const evaluar = (R) => Formulas.crearEvaluador({ formulario, respuestas: R, parametros: ctx.parametros });
+  const enlazadasDe = (q) => (q.subpreguntas || []).filter(esEnlazada);
+  const tieneDatos = (q, f) => (q.subpreguntas || []).some((s) => s.tipo !== 'CALCULADA' && !esEnlazada(s) && !estaVacio(f[s.id]));
   let R = despues;
-  // Varias pasadas: lo que cambia en una compuesta (la base de la planilla) se propaga a la
-  // que depende de ella (el pago) con el evaluador ya actualizado.
+
+  // 1) Filas que siguen a otra compuesta. Al quitar o mover filas del origen, cada fila
+  //    conserva la suya (se empareja por identidad); al editar una celda, por posición.
+  enlazadas.filter((q) => q.filasDe).forEach((q) => {
+    const origenAntes = filasDe(antes, q.filasDe), origen = filasDe(R, q.filasDe), propias = filasDe(R, q.id);
+    let nuevas;
+    if (!inicial && editada === q.filasDe) {
+      const mismaLongitud = origenAntes.length === origen.length;
+      nuevas = origen.map((o, k) => {
+        const previa = origenAntes.indexOf(o);
+        if (previa >= 0 && propias[previa]) return propias[previa];
+        return mismaLongitud && propias[k] ? propias[k] : filaNueva(q, ctx);
+      });
+    } else if (propias.length < origen.length) {
+      nuevas = [...propias, ...Array.from({ length: origen.length - propias.length }, () => filaNueva(q, ctx))];
+    } else if (propias.length > origen.length) {
+      // Al abrir datos guardados no se descartan filas con datos (p. ej. envíos de versiones anteriores).
+      const sobran = propias.slice(origen.length);
+      nuevas = inicial && sobran.some((f) => tieneDatos(q, f)) ? propias : propias.slice(0, origen.length);
+    } else return;
+    if (nuevas.length !== propias.length || nuevas.some((f, k) => f !== propias[k])) R = { ...R, [q.id]: nuevas };
+  });
+
+  // 2) Marcas. Filas sin marca (datos de versiones anteriores o filas nuevas): a mano es lo
+  //    que está lleno y difiere de su origen. Celdas que la persona acaba de cambiar: quedan
+  //    a mano si las vació o si difieren de su origen; vuelven a seguirlo si escribió el mismo valor.
+  const evActual = evaluar(R);
+  enlazadas.forEach((q) => {
+    const subs = enlazadasDe(q);
+    if (!subs.length) return;
+    const filasAntes = filasDe(antes, q.id), filas = filasDe(R, q.id);
+    const editadaAqui = !inicial && editada === q.id && filasAntes.length === filas.length;
+    let cambio = false;
+    const nuevas = filas.map((f, i) => {
+      const distinto = (s) => { const v = valorEnlace(f[s.id], s); return v !== null && v !== valorEnlace(origenEnlace(evActual, s.precargarDe, i), s); };
+      let marcas;
+      if (!Array.isArray(f[MARCA_MANUAL])) marcas = subs.filter(distinto).map((s) => s.id);
+      else if (editadaAqui) {
+        const previa = filasAntes[i] || {};
+        const tocadas = subs.filter((s) => valorEnlace(previa[s.id], s) !== valorEnlace(f[s.id], s));
+        if (!tocadas.length) return f;
+        marcas = manualesDe(f).filter((id) => !tocadas.some((s) => s.id === id)).concat(tocadas.filter((s) => valorEnlace(f[s.id], s) === null || distinto(s)).map((s) => s.id));
+      } else return f;
+      if (Array.isArray(f[MARCA_MANUAL]) && U.igualProfundo(U.unicos(marcas), manualesDe(f))) return f;
+      cambio = true;
+      return conManuales(f, marcas);
+    });
+    if (cambio) R = { ...R, [q.id]: nuevas };
+  });
+
+  // 3) Las celdas que no están a mano toman el valor de su origen (vacío si el origen está
+  //    vacío). Varias pasadas: la base de la planilla cambia lo obligatorio y eso, el pago.
   for (let pasada = 0; pasada <= enlazadas.length; pasada++) {
-    const evDespues = Formulas.crearEvaluador({ formulario, respuestas: R, parametros: ctx.parametros });
+    const ev = evaluar(R);
     let huboCambio = false;
     enlazadas.forEach((q) => {
-      let filas = filasDe(R, q.id);
+      const subs = enlazadasDe(q);
+      if (!subs.length) return;
       let cambio = false;
-      if (q.filasDe) {
-        const n = filasDe(R, q.filasDe).length;
-        if (filas.length !== n) {
-          filas = n > filas.length ? [...filas, ...Array.from({ length: n - filas.length }, () => filaNueva(q, ctx))] : filas.slice(0, n);
-          cambio = true;
-        }
-      }
-      const subs = (q.subpreguntas || []).filter((s) => s.precargarDe);
-      filas = filas.map((f, i) => {
+      const nuevas = filasDe(R, q.id).map((f, i) => {
         let fila = f;
         subs.forEach((s) => {
-          if (tocada(q, i, s)) return;
-          const previo = valorEnlace(origen(evAntes, s.precargarDe, i), s.tipo);
-          const nuevo = valorEnlace(origen(evDespues, s.precargarDe, i), s.tipo);
-          const actual = valorEnlace(f[s.id], s.tipo);
-          const enSincronia = actual === null || (previo !== null && actual === previo);
-          if (enSincronia && nuevo !== null && actual !== nuevo) {
-            if (fila === f) fila = { ...f };
-            fila[s.id] = nuevo;
-            cambio = true;
-          }
+          if (manualesDe(f).includes(s.id)) return;
+          const nuevo = valorEnlace(origenEnlace(ev, s.precargarDe, i), s);
+          if (valorEnlace(f[s.id], s) === nuevo) return;
+          if (fila === f) fila = { ...f };
+          fila[s.id] = nuevo === null ? valorVacioDe(s) : nuevo;
+          cambio = true;
         });
         return fila;
       });
-      if (cambio) { R = { ...R, [q.id]: filas }; huboCambio = true; }
+      if (cambio) { R = { ...R, [q.id]: nuevas }; huboCambio = true; }
     });
     if (!huboCambio) break;
   }
@@ -418,7 +467,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
     const R = armarRespuestasIniciales(formulario, ctx, respuestasIniciales);
-    return soloLectura ? R : sincronizarEnlaces(formulario, ctx, {}, R);
+    return soloLectura ? R : sincronizarEnlaces(formulario, ctx, R, R, { inicial: true });
   });
   const [capituloId, setCapituloId] = useState(capituloInicial || (capitulos[0] && capitulos[0].id));
   const [intentoEnvio, setIntentoEnvio] = useState(false);
@@ -443,7 +492,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     return () => clearTimeout(t);
   }, [respuestas]); // eslint-disable-line
 
-  const cambiar = (id, v) => setRespuestas((r) => (soloLectura ? { ...r, [id]: v } : sincronizarEnlaces(formulario, ctx, r, { ...r, [id]: v }, id)));
+  const cambiar = (id, v) => setRespuestas((r) => (soloLectura ? { ...r, [id]: v } : sincronizarEnlaces(formulario, ctx, r, { ...r, [id]: v }, { editada: id })));
 
   // Validación completa: { 'id' | 'comp.i.sub': mensaje } y conteo por capítulo.
   const errores = useMemo(() => {

@@ -720,7 +720,7 @@
                 "etiqueta": "Planillas que se acreditan",
                 "tipo": "COMPUESTA",
                 "obligatoria": true,
-                "ayuda": "El valor sobre el que cotiza se precarga con el valor a cobrar y se actualiza si lo cambias; escríbelo a mano solo si cotizas sobre otro valor.",
+                "ayuda": "El valor sobre el que cotiza se precarga con el valor a cobrar y lo sigue si lo cambias. Si lo escribes a mano, queda fijo; «Usar el valor a cobrar» lo vuelve a enlazar.",
                 "permiteAgregarFilas": true,
                 "minFilas": 1,
                 "maxFilas": 3,
@@ -762,7 +762,8 @@
                     "etiqueta": "Valor sobre el que cotiza",
                     "tipo": "MONEDA",
                     "obligatoria": true,
-                    "precargarDe": "valorCobrar"
+                    "precargarDe": "valorCobrar",
+                    "textoPrecarga": "Usar el valor a cobrar"
                   },
                   {
                     "id": "ibc",
@@ -819,7 +820,7 @@
                 "etiqueta": "Planillas pagadas",
                 "tipo": "COMPUESTA",
                 "obligatoria": true,
-                "ayuda": "Una por cada planilla de arriba. Salud, pensión y ARL se precargan con lo obligatorio: ajústalos si tu planilla dice otro valor.",
+                "ayuda": "Una por cada planilla de arriba. Salud, pensión y ARL se precargan con lo obligatorio y lo siguen; si tu planilla dice otro valor, escríbelo («Usar lo obligatorio» lo vuelve a enlazar).",
                 "filasDe": "planillas",
                 "etiquetaFila": "Planilla",
                 "permiteAgregarFilas": false,
@@ -843,21 +844,24 @@
                     "etiqueta": "Pago de salud realizado",
                     "tipo": "MONEDA",
                     "obligatoria": true,
-                    "precargarDe": "planillas.salud"
+                    "precargarDe": "planillas.salud",
+                    "textoPrecarga": "Usar lo obligatorio"
                   },
                   {
                     "id": "pension",
                     "etiqueta": "Pago de pensión realizado",
                     "tipo": "MONEDA",
                     "obligatoria": true,
-                    "precargarDe": "planillas.pension"
+                    "precargarDe": "planillas.pension",
+                    "textoPrecarga": "Usar lo obligatorio"
                   },
                   {
                     "id": "arl",
                     "etiqueta": "Pago de ARL realizado",
                     "tipo": "MONEDA",
                     "obligatoria": true,
-                    "precargarDe": "planillas.arl"
+                    "precargarDe": "planillas.arl",
+                    "textoPrecarga": "Usar lo obligatorio"
                   },
                   {
                     "id": "soporte",
@@ -1384,7 +1388,7 @@
     // --- Semillas iniciales (admin, proyecto nuevo) ---
     DB.sembrarBase = async () => {
       const existentes = await DB.listarFormularios();
-      for (const f of FORMULARIOS_SEMILLA) if (!existentes.some((x) => x.id === f.id)) await DB.guardarFormulario(U.clonar(f));
+      for (const f of FORMULARIOS_SEMILLA) if (!existentes.some((x) => x.id === f.id)) await DB.guardarFormulario({ ...U.clonar(f), versionBase: f.version });
       const catalogos = await DB.listarCatalogos();
       for (const id of Object.keys(CATALOGOS_SEMILLA)) if (!catalogos.some((c) => c.id === id)) await DB.guardarCatalogo(id, U.clonar(CATALOGOS_SEMILLA[id]));
       const p = await A.get('parametros', 'app');
