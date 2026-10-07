@@ -553,6 +553,16 @@ const validarEsquema = (f) => {
       if ((q.tipo === 'SELECCION_UNICA' || q.tipo === 'SELECCION_MULTIPLE') && !Array.isArray(q.opciones) && !q.origenOpciones) p.push(`${ref}: faltan opciones u origenOpciones`);
     });
   });
+  // Compuestas enlazadas: filasDe y precargarDe deben apuntar a una compuesta (y campo) que exista.
+  const compuestas = {};
+  (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => { if (q.tipo === 'COMPUESTA') compuestas[q.id] = q; }));
+  Object.values(compuestas).forEach((q) => {
+    if (q.filasDe && (!compuestas[q.filasDe] || q.filasDe === q.id)) p.push(`${q.id}: filasDe «${q.filasDe}» no es otra pregunta compuesta`);
+    (q.subpreguntas || []).filter((s) => s.precargarDe).forEach((s) => {
+      const [origen, campo] = String(s.precargarDe).split('.');
+      if (!compuestas[origen] || !(compuestas[origen].subpreguntas || []).some((x) => x.id === campo)) p.push(`${q.id}.${s.id}: precargarDe «${s.precargarDe}» debe ser compuesta.campo existente`);
+    });
+  });
   return p.concat(Formulas.validarFormulario(f));
 };
 const EditorFormulario = ({ formulario, onCerrar, onGuardado }) => {
