@@ -18,7 +18,7 @@
   /* ===== 1. Semillas ===== */
   // Copia literal de referencia/formularios-semilla.json (la inserta el ensamblado).
   const KIT = {
-    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
+    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. COMPUESTA con filasDe: 'otraCompuesta' tiene una fila por cada fila de esa otra; subpregunta con precargarDe: 'compuesta.campo' toma el valor de la fila equivalente mientras la persona no lo cambie. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
     "formularios": [
       {
         "id": "info_contrato",
@@ -577,8 +577,8 @@
         "id": "cuenta_cobro",
         "nombre": "Cuenta de cobro y pago de seguridad social",
         "tipo": "CUENTA_COBRO",
-        "version": 2,
-        "novedad": "Los aportes obligatorios y el pago realizado quedan en un solo paso: «Seguridad social».",
+        "version": 3,
+        "novedad": "Aportes obligatorios y pago realizado quedan en un solo paso, «Seguridad social», y el pago se precarga con lo obligatorio de cada planilla.",
         "activo": true,
         "plantillaDescarga": "cuenta_cobro_provisional",
         "config": {
@@ -817,7 +817,10 @@
                 "etiqueta": "Planillas pagadas",
                 "tipo": "COMPUESTA",
                 "obligatoria": true,
-                "permiteAgregarFilas": true,
+                "ayuda": "Una por cada planilla de arriba. Salud, pensión y ARL se precargan con lo obligatorio: ajústalos si tu planilla dice otro valor.",
+                "filasDe": "planillas",
+                "etiquetaFila": "Planilla",
+                "permiteAgregarFilas": false,
                 "minFilas": 1,
                 "maxFilas": 3,
                 "subpreguntas": [
@@ -837,19 +840,22 @@
                     "id": "salud",
                     "etiqueta": "Pago de salud realizado",
                     "tipo": "MONEDA",
-                    "obligatoria": true
+                    "obligatoria": true,
+                    "precargarDe": "planillas.salud"
                   },
                   {
                     "id": "pension",
                     "etiqueta": "Pago de pensión realizado",
                     "tipo": "MONEDA",
-                    "obligatoria": true
+                    "obligatoria": true,
+                    "precargarDe": "planillas.pension"
                   },
                   {
                     "id": "arl",
                     "etiqueta": "Pago de ARL realizado",
                     "tipo": "MONEDA",
-                    "obligatoria": true
+                    "obligatoria": true,
+                    "precargarDe": "planillas.arl"
                   },
                   {
                     "id": "soporte",

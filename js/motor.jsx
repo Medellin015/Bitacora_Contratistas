@@ -9,7 +9,8 @@
         sí/no, calculada, archivo, url/teléfono/correo)
      4. Compuesta (tabla en escritorio, tarjetas en móvil)
      5. Pregunta (envoltura con etiqueta, ayuda, error, «Traer del mes anterior»)
-     6. MotorFormulario (estado, riel, navegación, autoguardado, enviar)
+     6. Compuestas enlazadas (filasDe / precargarDe)
+     7. MotorFormulario (estado, riel, navegación, autoguardado, enviar)
    ============================================================================ */
 
 /* ===== 1. Valores por defecto ===== */
@@ -233,8 +234,8 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   const subs = (q.subpreguntas || []);
   const hayTextoLargo = subs.some((s) => s.tipo === 'TEXTO_LARGO' || s.tipo === 'ARCHIVO');
   const comoTabla = !movil && !hayTextoLargo && subs.length <= 9;
-  const puedeAgregar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && (!q.maxFilas || filas.length < q.maxFilas);
-  const puedeQuitar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && filas.length > (q.minFilas || 0);
+  const puedeAgregar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && !q.filasDe && (!q.maxFilas || filas.length < q.maxFilas);
+  const puedeQuitar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && !q.filasDe && filas.length > (q.minFilas || 0);
   const obtenerFila = (i) => (n) => (n.startsWith('fila.') ? ev.valorFila(q.id, i, n.slice(5)) : ev.valor(n));
   const visibleSub = (s, i) => (s.condicion ? Formulas.evaluarCondicion(s.condicion, obtenerFila(i)) : true);
   const cambiarCelda = (i, subId, v) => onCambio(filas.map((f, j) => (j === i ? { ...f, [subId]: v } : f)));
@@ -243,7 +244,7 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   const mover = (i, d) => { const j = i + d; if (j < 0 || j >= filas.length) return; const copia = [...filas]; [copia[i], copia[j]] = [copia[j], copia[i]]; onCambio(copia); };
   const celdaEditable = (s) => editable && !s.soloLectura && s.tipo !== 'CALCULADA';
   const render = (s, i, compacto) => {
-    const idCampo = `${idBase}-${i}-${s.id}`;
+    const idCampo = `${idBase}-${q.id}-${i}-${s.id}`;
     const err = errores[`${q.id}.${i}.${s.id}`];
     if (!visibleSub(s, i)) return null;
     return (
@@ -254,7 +255,7 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
       </Campo>
     );
   };
-  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : 'Sin filas.'}</span>{puedeAgregar ? <Boton tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
+  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : q.filasDe ? 'Sin filas: aparecen solas con las filas de arriba.' : 'Sin filas.'}</span>{puedeAgregar ? <Boton tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
   if (comoTabla) {
     return (
       <div>
@@ -290,7 +291,8 @@ const TarjetaFila = ({ indice, fila, cabecera, cuerpo, render, q, puedeQuitar, q
   const [abierta, setAbierta] = useState(false);
   const numero = cabecera.find((s) => s.tipo === 'NUMERO');
   const textos = cabecera.filter((s) => s.tipo !== 'NUMERO');
-  const titulo = numero ? `${q.id === 'actividades' ? 'Actividad' : 'Fila'} ${fila[numero.id]}` : `Fila ${indice + 1}`;
+  const nombreFila = q.etiquetaFila || (q.id === 'actividades' ? 'Actividad' : 'Fila');
+  const titulo = numero ? `${nombreFila} ${fila[numero.id]}` : `${nombreFila} ${indice + 1}`;
   return (
     <div className="tarjeta" style={tieneError ? { borderColor: 'var(--error)' } : undefined}>
       <div className="tarjeta-cabecera" style={{ padding: '0.7rem 1rem' }}>
@@ -331,7 +333,55 @@ const Pregunta = ({ q, valor, onCambio, editable, error, ev, catalogos, subir, c
   );
 };
 
-/* ===== 6. MotorFormulario ===== */
+/* ===== 6. Compuestas enlazadas ===== */
+// «filasDe»: la compuesta tiene una fila por cada fila de otra (p. ej. un pago por planilla).
+// «precargarDe» ('compuesta.campo'): la celda toma el valor de la fila equivalente (p. ej. el
+// aporte obligatorio calculado). Se actualiza mientras siga vacía o igual al valor anterior
+// de su origen; si la persona escribió otro valor, se respeta. `omitir` es la compuesta que
+// se está editando: así una celda vaciada a mano no se vuelve a llenar mientras se escribe.
+const sincronizarEnlaces = (formulario, ctx, antes, despues, omitir) => {
+  const enlazadas = [];
+  (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => {
+    if (q.tipo === 'COMPUESTA' && q.id !== omitir && (q.filasDe || (q.subpreguntas || []).some((s) => s.precargarDe))) enlazadas.push(q);
+  }));
+  if (!enlazadas.length) return despues;
+  const evAntes = Formulas.crearEvaluador({ formulario, respuestas: antes, parametros: ctx.parametros });
+  const evDespues = Formulas.crearEvaluador({ formulario, respuestas: despues, parametros: ctx.parametros });
+  const numero = (v) => { const n = Number(v); return v === '' || v === null || v === undefined || !Number.isFinite(n) ? null : U.redondear(n, 0); };
+  let R = despues;
+  enlazadas.forEach((q) => {
+    let filas = Array.isArray(R[q.id]) ? R[q.id] : [];
+    let cambio = false;
+    if (q.filasDe) {
+      const n = Array.isArray(R[q.filasDe]) ? R[q.filasDe].length : 0;
+      if (filas.length !== n) {
+        filas = n > filas.length ? [...filas, ...Array.from({ length: n - filas.length }, () => filaNueva(q, ctx))] : filas.slice(0, n);
+        cambio = true;
+      }
+    }
+    const subs = (q.subpreguntas || []).filter((s) => s.precargarDe);
+    filas = filas.map((f, i) => {
+      let fila = f;
+      subs.forEach((s) => {
+        const [origen, campo] = String(s.precargarDe).split('.');
+        const previo = numero(evAntes.valorFila(origen, i, campo));
+        const nuevo = numero(evDespues.valorFila(origen, i, campo));
+        const actual = f[s.id];
+        const enSincronia = estaVacio(actual) || (previo !== null && numero(actual) === previo);
+        if (enSincronia && nuevo !== null && numero(actual) !== nuevo) {
+          if (fila === f) fila = { ...f };
+          fila[s.id] = nuevo;
+          cambio = true;
+        }
+      });
+      return fila;
+    });
+    if (cambio) R = { ...R, [q.id]: filas };
+  });
+  return R;
+};
+
+/* ===== 7. MotorFormulario ===== */
 /**
  * Props:
  *  formulario, ctx { usuario, contrato, parametros, periodo:{desde,hasta}, consecutivo, catalogos }
@@ -344,7 +394,10 @@ const Pregunta = ({ q, valor, onCambio, editable, error, ev, catalogos, subir, c
 const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
-  const [respuestas, setRespuestas] = useState(() => armarRespuestasIniciales(formulario, ctx, respuestasIniciales));
+  const [respuestas, setRespuestas] = useState(() => {
+    const R = armarRespuestasIniciales(formulario, ctx, respuestasIniciales);
+    return soloLectura ? R : sincronizarEnlaces(formulario, ctx, {}, R);
+  });
   const [capituloId, setCapituloId] = useState(capituloInicial || (capitulos[0] && capitulos[0].id));
   const [intentoEnvio, setIntentoEnvio] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -368,7 +421,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     return () => clearTimeout(t);
   }, [respuestas]); // eslint-disable-line
 
-  const cambiar = (id, v) => setRespuestas((r) => ({ ...r, [id]: v }));
+  const cambiar = (id, v) => setRespuestas((r) => (soloLectura ? { ...r, [id]: v } : sincronizarEnlaces(formulario, ctx, r, { ...r, [id]: v }, id)));
 
   // Validación completa: { 'id' | 'comp.i.sub': mensaje } y conteo por capítulo.
   const errores = useMemo(() => {
