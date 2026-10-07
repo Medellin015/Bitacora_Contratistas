@@ -505,24 +505,34 @@ const PaginaAdminVentanas = () => {
 };
 
 /* ===== 6. Formularios ===== */
-// Formularios sembrados cuya plantilla base ya tiene una versión más nueva.
+// Formularios sembrados cuya plantilla base ya tiene una versión más nueva. versionBase es la
+// versión de la plantilla con la que se sembró o actualizó (publicar a mano no la cambia).
+// Sin versionBase (documentos anteriores) se usa la versión publicada y, si ya la alcanzó por
+// publicaciones a mano, se compara el contenido con la plantilla.
+const versionBaseDe = (f) => Number(f.versionBase != null ? f.versionBase : f.version) || 1;
 const formulariosDesactualizados = (formularios) => SEMILLAS.formularios
   .map((base) => ({ base, actual: formularios.find((f) => f.id === base.id) }))
-  .filter(({ base, actual }) => actual && Number(base.version) > (Number(actual.version) || 1));
+  .filter(({ base, actual }) => actual && (Number(base.version) > versionBaseDe(actual)
+    || (actual.versionBase == null && Number(base.version) > 1 && !U.igualProfundo(actual.capitulos || [], base.capitulos || []))));
 // Publica la plantilla base como versión nueva. Las respuestas se guardan por id de
 // pregunta, así que los envíos y borradores existentes siguen sirviendo.
 const actualizarABase = async (app, { base, actual }) => {
   if (!(await app.confirmar({ titulo: `Actualizar «${actual.nombre}»`, mensaje: `Se reemplaza por la plantilla base, versión ${base.version}.${base.novedad ? `\n\n${base.novedad}` : ''}\n\nLos envíos ya hechos conservan su contenido y los borradores siguen funcionando. Si habías editado este formulario a mano, esos cambios se pierden.`, textoOk: 'Actualizar' }))) return;
   try {
-    await DB.publicarVersion({ ...U.clonar(base), activo: actual.activo !== false }, Number(base.version));
-    app.avisar('exito', `«${base.nombre}» quedó en la versión ${base.version}`);
+    await DB.publicarVersion({ ...U.clonar(base), activo: actual.activo !== false, versionBase: Number(base.version) }, Math.max(Number(base.version), (Number(actual.version) || 0) + 1));
+    app.avisar('exito', `«${base.nombre}» quedó con la plantilla base ${base.version}`);
     app.recargarTodo();
   } catch (e) { app.avisar('error', DB.traducirError(e)); }
+};
+// «Mantener mi versión»: el formulario queda como está y se marca al día con la plantilla base.
+const mantenerVersion = async (app, { base, actual }) => {
+  if (!(await app.confirmar({ titulo: `Mantener «${actual.nombre}»`, mensaje: `Tu formulario queda como está (no recibe los cambios de la plantilla base ${base.version}) y el aviso desaparece.`, textoOk: 'Mantener' }))) return;
+  try { await DB.guardarFormulario({ ...actual, versionBase: Number(base.version) }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }
 };
 const AvisosPlantillaBase = ({ className = 'mb-3' }) => {
   const app = useApp();
   return formulariosDesactualizados(app.formularios).map((d) => (
-    <div key={d.base.id} className={`alerta-caja alerta-info items-center flex-wrap ${className}`}><Icono nombre="refrescar" /><div className="flex-1 min-w-0 text-sm"><strong>Hay una versión nueva de «{d.base.nombre}»</strong> (versión {d.actual.version || 1} → {d.base.version}).{d.base.novedad ? ` ${d.base.novedad}` : ''}</div><Boton tam="sm" variante="primario" icono="refrescar" onClick={() => actualizarABase(app, d)}>Actualizar</Boton></div>
+    <div key={d.base.id} className={`alerta-caja alerta-info items-center flex-wrap ${className}`}><Icono nombre="refrescar" /><div className="flex-1 min-w-0 text-sm"><strong>Hay una versión nueva de «{d.base.nombre}»</strong> ({d.actual.versionBase != null ? `plantilla base ${d.actual.versionBase}` : `tu versión ${d.actual.version || 1}`} → plantilla base {d.base.version}).{d.base.novedad ? ` ${d.base.novedad}` : ''}</div><div className="flex gap-2 flex-wrap"><Boton tam="sm" variante="fantasma" onClick={() => mantenerVersion(app, d)}>Mantener mi versión</Boton><Boton tam="sm" variante="primario" icono="refrescar" onClick={() => actualizarABase(app, d)}>Actualizar</Boton></div></div>
   ));
 };
 const TIPOS_PREGUNTA = ['TEXTO', 'TEXTO_LARGO', 'NUMERO', 'MONEDA', 'PORCENTAJE', 'FECHA', 'SELECCION_UNICA', 'SELECCION_MULTIPLE', 'SI_NO', 'CALCULADA', 'COMPUESTA', 'ARCHIVO', 'URL', 'TELEFONO', 'CORREO', 'SEPARADOR'];
@@ -554,13 +564,17 @@ const validarEsquema = (f) => {
     });
   });
   // Compuestas enlazadas: filasDe y precargarDe deben apuntar a una compuesta (y campo) que exista.
-  const compuestas = {};
-  (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => { if (q.tipo === 'COMPUESTA') compuestas[q.id] = q; }));
+  const compuestas = {}, primerNivel = {};
+  (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => { primerNivel[q.id] = q; if (q.tipo === 'COMPUESTA') compuestas[q.id] = q; }));
+  const ORIGEN_NO_SIMPLE = ['ARCHIVO', 'SELECCION_MULTIPLE', 'COMPUESTA', 'SEPARADOR'];
   Object.values(compuestas).forEach((q) => {
     if (q.filasDe && (!compuestas[q.filasDe] || q.filasDe === q.id)) p.push(`${q.id}: filasDe «${q.filasDe}» no es otra pregunta compuesta`);
     (q.subpreguntas || []).filter((s) => s.precargarDe).forEach((s) => {
       const [origen, campo] = String(s.precargarDe).split('.');
-      if (!compuestas[origen] || !(compuestas[origen].subpreguntas || []).some((x) => x.id === campo)) p.push(`${q.id}.${s.id}: precargarDe «${s.precargarDe}» debe ser compuesta.campo existente`);
+      const fuente = campo === undefined ? primerNivel[origen] : compuestas[origen] && (compuestas[origen].subpreguntas || []).find((x) => x.id === campo);
+      if (!fuente || (campo === undefined && compuestas[origen])) p.push(`${q.id}.${s.id}: precargarDe «${s.precargarDe}» debe ser una pregunta de primer nivel o compuesta.campo existente`);
+      else if (ORIGEN_NO_SIMPLE.includes(fuente.tipo)) p.push(`${q.id}.${s.id}: precargarDe no puede tomar valores de una pregunta ${fuente.tipo}`);
+      if (TIPOS_SIN_PRECARGA.includes(s.tipo)) p.push(`${q.id}.${s.id}: precargarDe no aplica a preguntas ${s.tipo}`);
     });
   });
   return p.concat(Formulas.validarFormulario(f));
@@ -577,8 +591,12 @@ const EditorFormulario = ({ formulario, onCerrar, onGuardado }) => {
     if (analisis.f.id !== formulario.id && app.formularios.some((x) => x.id === analisis.f.id)) { app.avisar('alerta', 'Ya existe un formulario con ese id'); return; }
     setGuardando(true);
     try {
-      if (publicar) { const v = await DB.publicarVersion(analisis.f); app.avisar('exito', `Versión ${v} publicada`); }
-      else { await DB.guardarFormulario({ ...analisis.f, version: formulario.version || analisis.f.version || 1 }); app.avisar('exito', 'Formulario guardado'); }
+      // La versión publicada nunca retrocede (no se pisa una copia de versiones/N) y la
+      // plantilla base se conserva aunque el JSON no la traiga.
+      const conBase = { ...analisis.f, versionBase: analisis.f.versionBase != null ? analisis.f.versionBase : formulario.versionBase };
+      if (conBase.versionBase == null) delete conBase.versionBase;
+      if (publicar) { const v = await DB.publicarVersion(conBase, Math.max(Number(analisis.f.version) || 0, Number(formulario.version) || 0) + 1); app.avisar('exito', `Versión ${v} publicada`); }
+      else { await DB.guardarFormulario({ ...conBase, version: formulario.version || analisis.f.version || 1 }); app.avisar('exito', 'Formulario guardado'); }
       onGuardado();
     } catch (e) { app.avisar('error', DB.traducirError(e)); } finally { setGuardando(false); }
   };
@@ -590,7 +608,7 @@ const EditorFormulario = ({ formulario, onCerrar, onGuardado }) => {
         <div className="grid gap-3">
           <Area className="editor-json" autoAlto={false} value={texto} onChange={(e) => setTexto(e.target.value)} spellCheck={false} aria-label="JSON del formulario" />
           {analisis.problemas.length ? <Alerta tipo="error"><strong>{analisis.problemas.length} {U.plural(analisis.problemas.length, 'problema', 'problemas')}</strong><ul className="text-xs mt-1 grid gap-0.5">{analisis.problemas.map((p, i) => <li key={i}>{p}</li>)}</ul></Alerta> : <Alerta tipo="exito">Esquema y fórmulas válidos.</Alerta>}
-          <div className="flex gap-2 flex-wrap"><Boton tam="xs" onClick={() => { try { setTexto(JSON.stringify(JSON.parse(texto), null, 2)); } catch (e) { app.avisar('error', 'JSON inválido'); } }}>Formatear</Boton><Boton tam="xs" onClick={() => { const s = SEMILLAS.formularios.find((x) => x.id === formulario.id); if (s) setTexto(JSON.stringify(s, null, 2)); else app.avisar('info', 'Este formulario no tiene semilla'); }}>Restaurar semilla</Boton><Boton tam="xs" onClick={() => U.descargarTexto(texto, `${formulario.id}.json`, 'application/json')}>Descargar JSON</Boton></div>
+          <div className="flex gap-2 flex-wrap"><Boton tam="xs" onClick={() => { try { setTexto(JSON.stringify(JSON.parse(texto), null, 2)); } catch (e) { app.avisar('error', 'JSON inválido'); } }}>Formatear</Boton><Boton tam="xs" onClick={() => { const s = SEMILLAS.formularios.find((x) => x.id === formulario.id); if (s) setTexto(JSON.stringify({ ...s, version: formulario.version || s.version, versionBase: s.version }, null, 2)); else app.avisar('info', 'Este formulario no tiene semilla'); }}>Restaurar semilla</Boton><Boton tam="xs" onClick={() => U.descargarTexto(texto, `${formulario.id}.json`, 'application/json')}>Descargar JSON</Boton></div>
         </div>
         <div>
           <div className="flex items-center justify-between mb-2"><h2>Vista previa en vivo</h2><Conmutador activo={verPrevia} onCambio={setVerPrevia} etiqueta="Mostrar" id="ver-previa" /></div>
