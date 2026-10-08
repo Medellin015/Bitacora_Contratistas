@@ -20,6 +20,16 @@
   const urlDe = (nombre) => String(((parametros.flujos || {})[nombre]) || '').trim();
   const disponible = (nombre) => /^https:\/\//i.test(urlDe(nombre));
 
+  const errorRed = (nombre) => { const t = new Error(`No se pudo conectar con el flujo «${nombre}». Intenta de nuevo; si sigue, avisa al administrador`); t.code = 'flujo-red'; return t; };
+  // Texto para el aviso: el mensaje del flujo; si respondió la propia plataforma con su formato
+  // ({ error: { code, message } }, en inglés, o una página HTML), el código HTTP y el detalle corto.
+  const legible = (x) => typeof x === 'string' && x.trim() !== '' && x.length <= 300 && !/^\s*</.test(x);
+  const mensajeDe = (json, nombre, estado) => {
+    if (legible(json.mensaje)) return json.mensaje;
+    const detalle = [json.error, json.error && json.error.message].find(legible);
+    return `El flujo «${nombre}» respondió ${estado}${detalle ? ` (${detalle})` : ''}`;
+  };
+
   const llamar = async (nombre, cuerpo, { tiempoMs = 120000 } = {}) => {
     const url = urlDe(nombre);
     if (!disponible(nombre)) { const e = new Error(`El flujo «${nombre}» no está configurado en Parámetros`); e.code = 'flujo-sin-url'; throw e; }
@@ -27,7 +37,12 @@
     const temporizador = setTimeout(() => control.abort(), tiempoMs);
     try {
       // Vigente al menos 5 min: la subida de un archivo grande puede tardar (la app espera hasta 3 min).
-      const idToken = await raiz.Auth.idToken(300000);
+      let idToken;
+      try { idToken = await raiz.Auth.idToken(300000); }
+      catch (e) {
+        if (e && e.code === 'auth/network-request-failed') throw errorRed(nombre);
+        const t = new Error(raiz.DB.traducirError(e)); t.code = e && e.code; throw t;
+      }
       let respuesta, texto;
       try {
         // charset explícito: Power Automate guarda text/plain en bruto y así no daña las tildes.
@@ -36,13 +51,14 @@
       } catch (e) {
         // fetch rechaza con TypeError si no hay red o si la respuesta no trae Access-Control-Allow-Origin
         // (también los errores de la propia plataforma: tiempo agotado, flujo apagado). Ver docs/flujos.md.
-        if (e instanceof TypeError) { const t = new Error(`No se pudo conectar con el flujo «${nombre}». Intenta de nuevo; si sigue, avisa al administrador`); t.code = 'flujo-red'; throw t; }
+        if (e instanceof TypeError) throw errorRed(nombre);
         throw e;
       }
       let json;
       try { json = texto ? JSON.parse(texto) : {}; } catch (e) { json = { ok: respuesta.ok, mensaje: texto }; }
+      if (!json || typeof json !== 'object') json = {};
       if (!respuesta.ok || json.ok === false) {
-        const e = new Error(json.mensaje || json.error || `El flujo «${nombre}» respondió ${respuesta.status}`);
+        const e = new Error(mensajeDe(json, nombre, respuesta.status));
         e.code = `flujo-${respuesta.status}`;
         throw e;
       }
@@ -67,7 +83,7 @@
     const base64 = await U.leerArchivoBase64(archivo);
     const r = await llamar('subirArchivo', { origen, docId, preguntaId, nombre, tipo: archivo.type || 'application/octet-stream', base64 }, { tiempoMs: 180000 });
     // Sin enlace no hay archivo que adjuntar (p. ej. un 202 vacío de un flujo sin acción «Respuesta»).
-    if (r.ok !== true || !r.url) { const e = new Error('El flujo no devolvió el enlace del archivo; no se adjuntó'); e.code = 'flujo-sin-enlace'; throw e; }
+    if (typeof r.url !== 'string' || !/^https?:\/\//i.test(r.url)) { const e = new Error('El flujo no devolvió el enlace del archivo (revisa su acción «Respuesta»); no se adjuntó'); e.code = 'flujo-sin-enlace'; throw e; }
     // Se muestra el nombre original: en OneDrive el archivo lleva un prefijo único (ver docs/flujos.md).
     return { ok: true, url: r.url, id: r.id || '', nombre, tamano: archivo.size };
   };

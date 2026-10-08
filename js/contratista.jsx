@@ -601,10 +601,16 @@ const PaginaFormulario = () => {
   const subir = async (archivo, pregunta) => {
     // El flujo lee el borrador (dueño, contrato, formulario y período) para ubicar el archivo: se
     // guarda antes de subir con lo que hay en pantalla, aunque todavía no se haya autoguardado.
+    // Sin flujo configurado no hace falta (subirArchivo avisa de una vez). Sin red, Firestore no
+    // confirma la escritura: a los 15 s se avisa en vez de dejar la subida girando.
     const doc = !esCorreccion && respuestasActuales.current
       ? { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas: respuestasActuales.current, capituloActual: (ultimoGuardado.current && ultimoGuardado.current.capituloActual) || null }
       : ultimoGuardado.current;
-    if (doc) { ultimoGuardado.current = doc; await DB.guardarBorrador(idBorrador, doc).catch(() => {}); }
+    if (doc && (window.MODO_DEMO || Flujos.disponible('subirArchivo'))) {
+      ultimoGuardado.current = doc;
+      const guardado = await Promise.race([DB.guardarBorrador(idBorrador, doc).then(() => true, () => false), U.esperar(15000).then(() => null)]);
+      if (guardado === null) { const e = new Error('Sin conexión: no se pudo guardar el borrador antes de subir. Revisa la red e inténtalo de nuevo'); e.code = 'sin-red'; throw e; }
+    }
     return Flujos.subirArchivo({ origen: esCorreccion ? 'envio' : 'borrador', docId: esCorreccion ? envio.id : idBorrador, preguntaId: pregunta.id, archivo, maxMB: pregunta.maxMB || 15 });
   };
   const armarDocumentos = async (respuestas, voBoTexto) => {

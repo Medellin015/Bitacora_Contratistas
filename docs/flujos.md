@@ -7,7 +7,7 @@ avisa y sigue funcionando.
 | Flujo | Para qué | Obligatorio |
 | --- | --- | --- |
 | `subirArchivo` | Guarda en OneDrive o SharePoint los archivos que se adjuntan en los formularios y devuelve el enlace. | Sí, para adjuntar archivos |
-| `notificar` | Envía los correos de envío, devolución, solicitud y recordatorio. | No |
+| `notificar` | Envía los correos de envío, devolución, aprobación, solicitud y recordatorio. | No |
 | `docxAPdf` | Convierte el Word a PDF desde la vista previa. | No |
 
 ## Convención común
@@ -55,7 +55,7 @@ La app envía, por cada archivo:
 | `base64` | El archivo en base64, sin `data:…,`. Máximo 15 MB (unos 20 MB en base64). |
 
 Respuesta esperada: `200` con `{ "ok": true, "url": "<enlace para ver el archivo>", "id": "<id en OneDrive>", "nombre": "<nombre en OneDrive>" }`.
-Sin `ok: true` y `url`, la app no adjunta nada y avisa a la persona.
+Sin un `url` que empiece por `https://`, la app no adjunta nada y avisa a la persona.
 
 ### Dónde queda el archivo
 
@@ -298,7 +298,9 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 | «No se pudo verificar tu sesión o tu permiso…» | Falló `Leer_documento` o `Leer_contrato`. Firestore respondió 401 (token), 403 (reglas) o 404, o el proyecto de la URI no es `bitacora-contratistas`. | Mira el código en el historial. Con 403 o 404, la persona debe recargar la página; si sigue, revisa que el contrato sea suyo. |
 | «No se pudo guardar el archivo en OneDrive…» | Ruta con el vínculo para compartir (`https://…`), conexión de otra cuenta, o OneDrive limitó las solicitudes. | Revisa `Crear_archivo` en el historial. |
 | El enlace abre, pero el archivo no está en la carpeta raíz | La ruta raíz quedó mal escrita (por ejemplo con «Mis archivos» o «Documentos») y el conector creó otra carpeta. | Busca el archivo por su nombre en OneDrive y corrige `/RUTA/DE/TU/CARPETA`. |
-| «El flujo no devolvió el enlace del archivo» | No hay acción «Respuesta», tiene «Respuesta asincrónica» activada, o el cuerpo no trae `ok` y `url`. | Revisa la acción «Respuesta». |
+| «El flujo no devolvió el enlace del archivo…» | No hay acción «Respuesta», tiene «Respuesta asincrónica» activada, o el cuerpo no trae `url`. | Revisa la acción «Respuesta». |
+| «El flujo «subirArchivo» respondió 401» (o 403, 504…) | Respondió la propia plataforma, no el flujo: «Quién puede desencadenar» no es «Cualquiera», falta la licencia Premium o pasaron los 120 s. | Revisa el disparador y el historial de ejecuciones. |
+| «Sin conexión: no se pudo guardar el borrador antes de subir…» | La persona no tiene red. | Que revise la conexión y vuelva a intentarlo. |
 | El archivo se abre dañado o contiene texto | Se editó «Contenido del archivo» después de guardar y el diseñador borró `base64ToBinary()`, que hasta entonces solo estaba oculto. | En la pestaña «Vista de código» de `Crear_archivo`, verifica que diga `base64ToBinary(json(triggerBody())?['base64'])`; si no, borra el campo y vuelve a pegar la expresión completa. |
 | El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera o de invitado, o la organización hace caducar los vínculos. | Para externos, usa el ámbito anónimo si tu organización lo permite. Si caducan, el archivo sigue en la carpeta: pide a TI una excepción. |
 
@@ -314,7 +316,7 @@ puedes apagar el flujo.
 ## notificar
 
 La app envía `{ idToken, evento, coleccion, docId }`, con `evento` igual a
-`envio`, `devolucion`, `solicitud` o `recordatorio`, y espera `200` con
+`envio`, `devolucion`, `aprobacion`, `solicitud` o `recordatorio`, y espera `200` con
 `{ "ok": true }`. Cada intento queda registrado en `notificaciones`. Igual que
 `subirArchivo`, el flujo lee el documento (`coleccion/docId`) con el token para
 armar destinatarios y mensaje, y responde con `Access-Control-Allow-Origin: *`.
