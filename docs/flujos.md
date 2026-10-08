@@ -83,8 +83,10 @@ un archivo. En la app se sigue viendo el nombre original.
    «Documentos». El vínculo para compartir (`https://…/:f:/g/personal/…`) **no
    sirve** como ruta.
 3. **Licencia Premium** y, si tu organización tiene directivas de datos (DLP),
-   que permitan usar «HTTP» y «OneDrive para la Empresa» en el mismo flujo, con
-   acceso a `firestore.googleapis.com`.
+   que dejen usar en el mismo flujo «Cuando se recibe una solicitud HTTP» (de
+   ese conector sale también la acción «Respuesta»), «HTTP» y «OneDrive para la
+   Empresa», los tres en el mismo grupo, con acceso a
+   `firestore.googleapis.com`. Si no sabes cómo están, pregúntale a TI.
 
 ### Crear el flujo con Copilot
 
@@ -103,9 +105,10 @@ When an HTTP request is received (method POST, who can trigger the flow: Anyone,
 4. After "Capturar", add a Response action named "Respuesta" that runs when "Capturar" is successful, skipped, failed or timed out, with status code variables('codigo'), headers Content-Type: application/json and Access-Control-Allow-Origin: *, and body variables('cuerpo').
 ```
 
-Envía el texto. Cuando Copilot muestre la propuesta, continúa (*Keep it and
-continue*). Confirma que la conexión de OneDrive para la Empresa tenga la marca
-verde y sea la de la cuenta dueña de la carpeta, y pulsa **Crear flujo**.
+Envía el texto con la flecha. Cuando Copilot muestre la propuesta, pulsa
+**Mantener y continuar** (en inglés, *Keep it and continue*). Confirma que la
+conexión de OneDrive para la Empresa tenga la marca verde y sea la de la cuenta
+dueña de la carpeta, y pulsa **Crear flujo**.
 
 **Revisa lo que armó Copilot antes de pegar nada.** No siempre sigue el texto
 al pie de la letra: puede omitir acciones, dejarlas fuera de un ámbito, elegir
@@ -257,10 +260,15 @@ cada par de comillas vacías e inserta con *fx* esta expresión (sin `@{` ni
 - en `id`: `body('Crear_archivo')?['Id']`
 - en `nombre`: `body('Crear_archivo')?['Name']`
 
-Al terminar, la pestaña «Vista de código» de la acción debe mostrar:
+Al terminar, abre la pestaña «Vista de código» de la acción. Sale toda la
+acción en varias líneas; dentro de `"value"` deben verse estas cuatro (el
+diseñador agrega `@{` y `}` por su cuenta):
 
 ```
-{"ok": true, "url": "@{body('Crear_vinculo')?['WebUrl']}", "id": "@{body('Crear_archivo')?['Id']}", "nombre": "@{body('Crear_archivo')?['Name']}"}
+"ok": true,
+"url": "@{body('Crear_vinculo')?['WebUrl']}",
+"id": "@{body('Crear_archivo')?['Id']}",
+"nombre": "@{body('Crear_archivo')?['Name']}"
 ```
 
 **4. Ámbito «Capturar»**
@@ -311,14 +319,23 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 
 ### Probar y conectar
 
-1. Guarda el flujo. Luego haz clic en la tarjeta «Cuando se recibe una
-   solicitud HTTP»: el campo «HTTP URL» (puede decir «Dirección URL HTTP») ya
-   tiene la dirección; solo se llena después del primer guardado. Cópiala con
-   el ícono de copiar que tiene al lado: empieza por `https://` y termina con
-   `sig=…`. Pégala en **Parámetros → subirArchivo (OneDrive o SharePoint)** y
-   pulsa «Guardar cambios». Quien ya tenía la app abierta debe recargarla (F5).
-2. En la app, abre un formulario y adjunta un PDF pequeño. Debe quedar el
-   enlace en la fila y el archivo en `<carpeta raíz>/<contrato> - <nombre>/<período>`.
+1. Guarda el flujo. Si en la barra de arriba ves **Guardar borrador** y
+   **Publicar** en vez de **Guardar** (pasa cuando el entorno crea los flujos
+   dentro de una solución), pulsa **Publicar**: un borrador no se ejecuta, y la
+   app seguiría llamando a la última versión publicada o a ninguna. Luego haz
+   clic en la tarjeta «Cuando se recibe una solicitud HTTP»: el campo «HTTP
+   URL» (puede decir «Dirección URL HTTP») ya tiene la dirección; solo se llena
+   después de guardar (o publicar) por primera vez. Cópiala con el ícono de
+   copiar que tiene al lado: empieza por `https://` y termina con `sig=…`.
+   Pégala en **Parámetros → subirArchivo (OneDrive o SharePoint)** y pulsa
+   «Guardar cambios». Quien ya tenía la app abierta debe recargarla (F5).
+2. En la app, abre el **Informe de ejecución mensual** o la **Cuenta de
+   cobro** de un contrato cuyo período tenga la ventana abierta (si la app dice
+   «La ventana de … no está abierta», ábrela en **Ventanas**). Como
+   administrador, entra al contrato y usa «Diligenciar en nombre del
+   contratista», o «Mi vista de contratista» si el contrato es tuyo. Adjunta un
+   PDF pequeño: debe quedar el enlace en la fila y el archivo en
+   `<carpeta raíz>/<contrato> - <nombre>/<período>`.
 3. Abre el enlace y verifica que el archivo se ve bien.
 4. En DevTools (F12) → Red, abre la solicitud al flujo: en la respuesta debe
    haber **un solo** `Access-Control-Allow-Origin`. Si sale dos veces, quítalo
@@ -328,7 +345,9 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
    `Leer_documento`, `Leer_contrato`, `Crear_archivo` y `Filtrar_fallo`. En
    `Entrada` (Redactar) solo existe **Entradas seguras**: actívala; también
    oculta sus salidas. Así el token y el archivo no quedan visibles en el
-   historial de ejecuciones.
+   historial de ejecuciones. Después vuelve a pulsar **Guardar** (o
+   **Publicar**, si el flujo es de solución). Haz lo mismo cada vez que
+   corrijas algo.
 
 ### Problemas frecuentes
 
@@ -345,6 +364,7 @@ La app muestra cada error así: «No se pudo subir «archivo»: *mensaje*».
 | «El flujo «subirArchivo» respondió 401» (o 403, 504…) | Respondió la propia plataforma, no el flujo: «Quién puede desencadenar» no es «Cualquiera», falta la licencia Premium, o el flujo no respondió en 120 s (504). | Revisa el disparador y, en el historial, qué acción tardó o falló; los reintentos deben estar en «Ninguno». |
 | «El flujo «subirArchivo» no respondió a tiempo» | Pasaron más de 3 minutos entre subir el archivo y recibir la respuesta: conexión lenta o archivo grande. | Prueba con mejor conexión o con un archivo más liviano. |
 | «Sin conexión: no se pudo guardar el borrador antes de subir…» | La persona no tiene red. | Que revise la conexión y vuelva a intentarlo. |
+| «No se pudo guardar el borrador antes de subir: …» | Firestore no aceptó el borrador que la app guarda justo antes de subir (por ejemplo, la cuenta quedó inactiva). El flujo no llegó a llamarse. | Que la persona recargue la página (F5) y lo intente de nuevo; si sigue, revisa en **Usuarios** que su cuenta esté activa. |
 | El archivo se abre dañado o contiene texto | Se editó «Contenido del archivo» después de guardar y el diseñador borró `base64ToBinary()`, que hasta entonces solo estaba oculto. | En la pestaña «Vista de código» de `Crear_archivo`, verifica que diga `base64ToBinary(json(triggerBody())?['base64'])`; si no, borra el campo y vuelve a pegar la expresión completa. |
 | El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera o de invitado, o la organización hace caducar los vínculos. | Para externos, usa el ámbito anónimo si tu organización lo permite. Si caducan, el archivo sigue en la carpeta: pide a TI una excepción. |
 

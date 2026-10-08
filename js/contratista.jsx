@@ -33,8 +33,26 @@ const completitudInfo = (formulario, contrato) => {
   const R = infoARespuestas(formulario, contrato && contrato.info);
   const obligatorias = [];
   (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => { if (q.obligatoria && q.tipo !== 'CALCULADA' && q.tipo !== 'SEPARADOR') obligatorias.push(q); }));
-  const faltan = obligatorias.filter((q) => estaVacio(R[q.id]));
+  const faltan = obligatorias.filter((q) => sinLlenar(R[q.id]));
   return { total: obligatorias.length, faltan: faltan.map((q) => q.etiqueta), porcentaje: obligatorias.length ? Math.round(((obligatorias.length - faltan.length) / obligatorias.length) * 100) : 100 };
+};
+// En corrección no se exige lo que la plantilla agregó después del envío (p. ej. la evidencia por
+// actividad de la v2 en un informe hecho con la v1): sigue visible, pero opcional. Una copia por
+// plantilla y envío, para que el motor no reciba una plantilla nueva en cada render.
+const plantillasDeCorreccion = new WeakMap();
+const sinExigirLoNuevo = (formulario, envio) => {
+  const R = (envio && envio.respuestas) || {};
+  let porEnvio = plantillasDeCorreccion.get(formulario);
+  if (!porEnvio) { porEnvio = new Map(); plantillasDeCorreccion.set(formulario, porEnvio); }
+  if (porEnvio.has(envio.id)) return porEnvio.get(envio.id);
+  const f = U.clonar(formulario);
+  (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => {
+    if (!(q.id in R)) { q.obligatoria = false; return; }
+    const filas = q.tipo === 'COMPUESTA' && Array.isArray(R[q.id]) ? R[q.id] : [];
+    if (filas.length) (q.subpreguntas || []).forEach((sub) => { if (filas.every((fila) => !fila || !(sub.id in fila))) sub.obligatoria = false; });
+  }));
+  porEnvio.set(envio.id, f);
+  return f;
 };
 const correccionVigente = (envio, ahora = new Date()) => !!(envio && envio.enCorreccion && U.esFecha(envio.fechaLimiteCorreccion) && envio.fechaLimiteCorreccion >= ahora);
 const nombreFormulario = (app, id) => { const f = app.formularios.find((x) => x.id === id); return f ? f.nombre : id; };
@@ -692,7 +710,7 @@ const PaginaFormulario = () => {
       <Encabezado titulo={titulo} subtitulo={`${contrato.numero} · ${U.nombrePeriodo(periodo)}${rango ? ` · ${U.textoPeriodo(rango.desde, rango.hasta)}` : ''}${esCorreccion ? ` · plazo ${U.fechaHora(envio.fechaLimiteCorreccion)}` : ''}`} migas={[{ texto: 'Inicio', onClick: () => app.navegar('#/inicio') }, { texto: formulario.nombre }]} />
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
-      <MotorFormulario key={`${formulario.id}-${decisionBorrador}`} formulario={formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
+      <MotorFormulario key={`${formulario.id}-${decisionBorrador}`} formulario={esCorreccion ? sinExigirLoNuevo(formulario, envio) : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
         subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : undefined}
         acciones={<Boton variante="fantasma" onClick={salir}>Salir</Boton>}

@@ -133,10 +133,12 @@ const armarRespuestasIniciales = (formulario, ctx, existentes) => {
 
 /* ===== 2. Validación ===== */
 const estaVacio = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+// Para validar y medir el avance, solo espacios también cuenta como vacío: un campo obligatorio
+// no se llena con espacios (estaVacio, sin esto, decide qué es dato propio al sincronizar).
+const sinLlenar = (v) => estaVacio(v) || (typeof v === 'string' && !v.trim());
 const validarValor = (q, v) => {
   if (q.tipo === 'CALCULADA' || q.tipo === 'SEPARADOR') return '';
-  // Solo espacios cuenta como vacío: un campo obligatorio no se llena con espacios.
-  if (estaVacio(v) || (typeof v === 'string' && !v.trim())) return q.obligatoria ? 'Este campo es obligatorio' : '';
+  if (sinLlenar(v)) return q.obligatoria ? 'Este campo es obligatorio' : '';
   switch (q.tipo) {
     case 'NUMERO': case 'MONEDA': case 'PORCENTAJE': {
       const n = Number(v);
@@ -746,12 +748,12 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         if (!filas.length || !subs.length) { total += 1; if (filas.length) llenas += 1; return; }
         filas.forEach((f, i) => {
           const obtenerFila = (n) => (n.startsWith('fila.') ? ev.valorFila(q.id, i, n.slice(5)) : ev.valor(n));
-          subs.forEach((s) => { if (s.condicion && !Formulas.evaluarCondicion(s.condicion, obtenerFila)) return; total += 1; if (!estaVacio(f[s.id])) llenas += 1; });
+          subs.forEach((s) => { if (s.condicion && !Formulas.evaluarCondicion(s.condicion, obtenerFila)) return; total += 1; if (!sinLlenar(f[s.id])) llenas += 1; });
         });
         return;
       }
       total += 1;
-      if (!estaVacio(respuestas[q.id])) llenas += 1;
+      if (!sinLlenar(respuestas[q.id])) llenas += 1;
     });
     return total ? Math.round((llenas / total) * 100) : 100;
   };

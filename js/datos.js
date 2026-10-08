@@ -398,7 +398,7 @@
         "nombre": "Informe de ejecución mensual",
         "tipo": "INFORME_MENSUAL",
         "version": 2,
-        "novedad": "Cada actividad tiene su evidencia (nombre del soporte, enlace o archivo) y en el Word aparece un anexo por cada una.",
+        "novedad": "Cada actividad ejecutada (más de 0 %) pide el nombre de su evidencia (obligatorio) y, si se quiere, un enlace o un archivo; en el Word aparece un anexo por cada una.",
         "activo": true,
         "plantillaDescarga": "informe_itm_sif",
         "config": {
@@ -575,7 +575,7 @@
               {
                 "id": "anexos",
                 "etiqueta": "Otros anexos (opcional)",
-                "ayuda": "Además de la evidencia de cada actividad, que ya sale en «Anexos del Informe».",
+                "ayuda": "Además de la evidencia de cada actividad ejecutada, que ya sale en «Anexos del Informe».",
                 "tipo": "COMPUESTA",
                 "permiteAgregarFilas": true,
                 "minFilas": 0,
@@ -1525,9 +1525,9 @@
     const respuestasInforme = {
       numeroInforme: 1, periodoDesde: inicioContrato > rAnt.desde ? inicioContrato : rAnt.desde, periodoHasta: rAnt.hasta, fechaElaboracion: rAnt.hasta,
       actividades: [
-        { numero: 1, obligacion: obligaciones[0].texto, porcentaje: 100, descripcion: 'Se dio continuidad al seguimiento semestral del mapa de oportunidades del proceso.\nSe organizaron los registros del seguimiento.' },
-        { numero: 2, obligacion: obligaciones[1].texto, porcentaje: 50, descripcion: 'Se apoyó la formulación de la acción de mejora y se actualizó el aplicativo de apoyo:\nhttps://ejemplo.github.io/aplicativo/' },
-        { numero: 3, obligacion: obligaciones[2].texto, porcentaje: 0, descripcion: '' },
+        { numero: 1, obligacion: obligaciones[0].texto, porcentaje: 100, descripcion: 'Se dio continuidad al seguimiento semestral del mapa de oportunidades del proceso.\nSe organizaron los registros del seguimiento.', evidencia: 'Registros del seguimiento semestral', evidenciaUrl: '', evidenciaArchivo: [] },
+        { numero: 2, obligacion: obligaciones[1].texto, porcentaje: 50, descripcion: 'Se apoyó la formulación de la acción de mejora y se actualizó el aplicativo de apoyo:\nhttps://ejemplo.github.io/aplicativo/', evidencia: 'Acción de mejora formulada', evidenciaUrl: 'https://ejemplo.github.io/aplicativo/', evidenciaArchivo: [] },
+        { numero: 3, obligacion: obligaciones[2].texto, porcentaje: 0, descripcion: '', evidencia: '', evidenciaUrl: '', evidenciaArchivo: [] },
       ],
       dificultades: 'NINGUNA', observaciones: 'NINGUNA',
       anexos: [{ nombre: 'Acta de reunión de seguimiento.pdf', ruta: '<RUTA_NAS>\\1000000004', url: '', archivo: [] }],
@@ -1548,7 +1548,7 @@
     const fotoInforme = D ? D.armarFoto(fInforme, respuestasInforme, { contrato: contratoDemo, usuario: usuarioDemo, parametros, catalogos }) : [];
     const datosInforme = D ? D.armarDatosInforme({ respuestas: respuestasInforme, contrato: contratoDemo, usuario: usuarioDemo, catalogos, parametros }) : {};
     await A.set('envios', DB.idEnvio('P-00000-DE-2026', 'informe_mensual', pAnterior, 1), {
-      contratoId: 'P-00000-DE-2026', formularioId: 'informe_mensual', formularioVersion: 1, periodo: pAnterior, n: 1, contratistaUid: 'demo-contratista',
+      contratoId: 'P-00000-DE-2026', formularioId: 'informe_mensual', formularioVersion: Number(fInforme && fInforme.version) || 1, periodo: pAnterior, n: 1, contratistaUid: 'demo-contratista',
       revisores: ['demo-revisor'], coordinadores: ['demo-coordinador'], consecutivo: 1, estado: 'aprobado', pasoActual: 'ninguno', enCorreccion: false, fechaLimiteCorreccion: null,
       respuestas: respuestasInforme, foto: fotoInforme, datosDescarga: datosInforme, anexos: [], totales: {},
       historial: historialAprobado, enviadoEn: historialAprobado[0].fecha, actualizadoEn: historialAprobado[2].fecha,
