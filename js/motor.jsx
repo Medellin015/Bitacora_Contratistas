@@ -262,7 +262,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
       const otro = valor !== '' && valor != null && !esPaso;
       return (
         <div className="flex flex-wrap items-center gap-2">
-          <Segmentado etiqueta={q.etiqueta} valor={esPaso ? valor : (otro ? '__otro' : '')} opciones={[...pasos.map((p) => ({ valor: p, etiqueta: `${p} %` })), { valor: '__otro', etiqueta: 'Otro' }]} onCambio={(v) => onCambio(v === '__otro' ? (esPaso || valor === '' ? 10 : valor) : v)} />
+          <Segmentado id={otro ? undefined : idCampo} etiqueta={q.etiqueta} valor={esPaso ? valor : (otro ? '__otro' : '')} opciones={[...pasos.map((p) => ({ valor: p, etiqueta: `${p} %` })), { valor: '__otro', etiqueta: 'Otro' }]} onCambio={(v) => onCambio(v === '__otro' ? (esPaso || valor === '' ? 10 : valor) : v)} />
           {otro ? <div className="relative w-28"><Entrada {...comun} type="number" inputMode="decimal" className="mono campo-sufijo" value={valor} min={0} max={100} onChange={(e) => onCambio(e.target.value === '' ? '' : Number(e.target.value))} aria-label={`${q.etiqueta} (otro valor)`} /><span className="absolute right-3 top-1/2 -translate-y-1/2 texto-3 text-sm">%</span></div> : null}
         </div>
       );
@@ -275,7 +275,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
     }
     case 'SELECCION_MULTIPLE': return <SeleccionMultiple q={q} valor={valor} onCambio={onCambio} editable={editable} invalido={invalido} catalogos={catalogos} />;
     case 'SI_NO': return editable
-      ? <Segmentado etiqueta={q.etiqueta} valor={valor} opciones={[{ valor: 'SI', etiqueta: 'Sí' }, { valor: 'NO', etiqueta: 'No' }]} onCambio={onCambio} />
+      ? <Segmentado id={idCampo} etiqueta={q.etiqueta} valor={valor} opciones={[{ valor: 'SI', etiqueta: 'Sí' }, { valor: 'NO', etiqueta: 'No' }]} onCambio={onCambio} />
       : <Entrada {...comun} value={valor === 'SI' ? 'Sí' : valor === 'NO' ? 'No' : ''} readOnly />;
     case 'CALCULADA': return (
       <div>
@@ -292,10 +292,25 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
 };
 
 /* ===== 4. Compuesta ===== */
+// Activado con el dedo: no se mueve el foco a un campo (en el teléfono abriría el teclado).
+const porToque = (e) => !!(e && e.nativeEvent && e.nativeEvent.pointerType === 'touch');
 const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogos, subir, ctx, traer }) => {
   const app = useApp();
   const motor = useContext(EstadoMotor);
   const movil = useMedia('(max-width: 767px)');
+  // Tras quitar una fila, el foco (que el diálogo devolvió al botón de esa fila, ya desmontado) pasa
+  // a la fila que quedó en su lugar o a «Agregar fila».
+  const focoTrasQuitar = useRef(null);
+  useEffect(() => {
+    const p = focoTrasQuitar.current;
+    if (!p || filas.some(esLaFila(p.fila))) return;
+    focoTrasQuitar.current = null;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const k = Math.min(p.i, filas.length - 1);
+    const primeraCelda = () => { try { return document.querySelector(`[id^="${CSS.escape(`${idBase}-${q.id}-${k}-`)}"]`); } catch (e) { return null; } };
+    const el = (k >= 0 && (document.getElementById(`${idFila(filas[k], k)}-quitar`) || primeraCelda())) || document.getElementById(`${idBase}-${q.id}-agregar`);
+    if (el && el.focus) el.focus();
+  });
   const subs = (q.subpreguntas || []);
   const hayTextoLargo = subs.some((s) => s.tipo === 'TEXTO_LARGO' || s.tipo === 'ARCHIVO');
   const comoTabla = !movil && !hayTextoLargo && subs.length <= 9;
@@ -303,6 +318,10 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   const puedeQuitar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && !q.filasDe && filas.length > (q.minFilas || 0);
   // Las filas que siguen a otra (filasDe) o a la lista del contrato (origenFilas) van en su orden.
   const ordenable = !!q.ordenable && editable && !q.filasDe && !q.origenFilas;
+  // Las filas de más de una compuesta con filasDe (ya sin fila de origen) se pueden quitar a mano.
+  const largoOrigen = q.filasDe && motor ? (Array.isArray(motor.leer(q.filasDe)) ? motor.leer(q.filasDe).length : 0) : Infinity;
+  const quitable = (i) => puedeQuitar || (editable && !!q.filasDe && i >= largoOrigen);
+  const hayQuitables = filas.some((_, i) => quitable(i));
   const obtenerFila = (i) => (n) => (n.startsWith('fila.') ? ev.valorFila(q.id, i, n.slice(5)) : ev.valor(n));
   const visibleSub = (s, i) => (s.condicion ? Formulas.evaluarCondicion(s.condicion, obtenerFila(i)) : true);
   // Se aplican sobre las filas vigentes (no las de este render): una subida de archivo termina
@@ -321,9 +340,23 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   };
   const cambiarCelda = (i, subId, v, info) => cambiarFila(i, (f) => ({ ...f, [subId]: typeof v === 'function' ? v(f[subId]) : v }), info);
   const idFila = (f, i) => `${idBase}-${q.id}-${(f && f[ID_FILA]) || i}`;
-  const enfocar = (id) => requestAnimationFrame(() => { const el = document.getElementById(id); if (el && el.focus) el.focus(); });
+  // Foco al control de la celda (en un grupo Sí/No, a la opción elegida) sin abrir listas.
+  const enfocar = (id) => requestAnimationFrame(() => {
+    const el = document.getElementById(id);
+    const destino = el && el.getAttribute('role') === 'group' ? (el.querySelector('[aria-pressed="true"]') || el.querySelector('button')) : el;
+    if (!destino || !destino.focus) return;
+    destino.dataset.sinAbrir = '1';
+    destino.focus();
+    delete destino.dataset.sinAbrir;
+  });
   const agregar = () => onCambio((fs) => [...vigentes(fs), filaNueva(q, ctx)]);
-  const quitar = async (i) => { const fila = filas[i]; if (await app.confirmar({ titulo: 'Quitar fila', mensaje: `¿Quitar la fila ${i + 1}?`, textoOk: 'Quitar', peligro: true })) onCambio((fs) => vigentes(fs).filter((f) => !esLaFila(fila)(f))); };
+  const quitar = async (i, toque) => {
+    const fila = filas[i];
+    const deMas = !puedeQuitar && !!q.filasDe;
+    if (!(await app.confirmar({ titulo: 'Quitar fila', mensaje: deMas ? `¿Quitar la fila ${i + 1}? Ya no tiene fila de origen.` : `¿Quitar la fila ${i + 1}?`, textoOk: 'Quitar', peligro: true }))) return;
+    focoTrasQuitar.current = toque ? null : { fila, i };
+    onCambio((fs) => vigentes(fs).filter((f) => !esLaFila(fila)(f)));
+  };
   const mover = (i, d) => {
     const fila = filas[i];
     onCambio((fs) => { const copia = [...vigentes(fs)]; const a = copia.findIndex(esLaFila(fila)); const b = a + d; if (a < 0 || b < 0 || b >= copia.length) return copia; [copia[a], copia[b]] = [copia[b], copia[a]]; return copia; });
@@ -342,29 +375,29 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
         <ControlPregunta q={s} valor={filas[i][s.id]} onCambio={(v, info) => cambiarCelda(i, s.id, v, info)} editable={celdaEditable(s)} idCampo={idCampo} invalido={!!err}
           ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} claveSubida={`${q.id}.${filas[i][ID_FILA] || i}.${s.id}`} />
         {traer && s.precargar === 'ultimoEnvio' && celdaEditable(s) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => traer(q.id, i, s.id)}>Traer del mes anterior</button> : null}
-        {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) && tieneOrigen(s, i) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={() => { cambiarFila(i, (f) => conManuales(f, manualesDe(f).filter((x) => x !== s.id))); enfocar(idCampo); }}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
+        {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) && tieneOrigen(s, i) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={(e) => { cambiarFila(i, (f) => conManuales(f, manualesDe(f).filter((x) => x !== s.id))); if (!porToque(e)) enfocar(idCampo); }}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
       </Campo>
     );
   };
-  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : q.filasDe ? 'Sin filas: aparecen solas con las filas de arriba.' : 'Sin filas.'}</span>{puedeAgregar ? <Boton tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
+  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : q.filasDe ? 'Sin filas: aparecen solas con las filas de arriba.' : 'Sin filas.'}</span>{puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
   if (comoTabla) {
     return (
       <div>
         <div className="tabla-envoltura">
           <table className="tabla">
-            <thead><tr><th style={{ width: 36 }}>#</th>{subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <th key={s.id}>{s.etiqueta}{s.obligatoria ? <span className="req">*</span> : null}</th>)}{(puedeQuitar || ordenable) ? <th /> : null}</tr></thead>
+            <thead><tr><th style={{ width: 36 }}>#</th>{subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <th key={s.id}>{s.etiqueta}{s.obligatoria ? <span className="req">*</span> : null}</th>)}{(hayQuitables || ordenable) ? <th /> : null}</tr></thead>
             <tbody>
               {filas.map((f, i) => (
                 <tr key={f[ID_FILA] || i}>
                   <td className="mono texto-3">{i + 1}</td>
                   {subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <td key={s.id} style={{ minWidth: 130, verticalAlign: 'top' }}>{render(s, i, true)}</td>)}
-                  {(puedeQuitar || ordenable) ? <td className="text-right whitespace-nowrap">{ordenable ? <><Boton id={`${idFila(f, i)}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={i === 0} onClick={() => mover(i, -1)} /><Boton id={`${idFila(f, i)}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={i === filas.length - 1} onClick={() => mover(i, 1)} /></> : null}{puedeQuitar ? <Boton variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={() => quitar(i)} /> : null}</td> : null}
+                  {(hayQuitables || ordenable) ? <td className="text-right whitespace-nowrap">{ordenable ? <><Boton id={`${idFila(f, i)}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={i === 0} onClick={() => mover(i, -1)} /><Boton id={`${idFila(f, i)}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={i === filas.length - 1} onClick={() => mover(i, 1)} /></> : null}{quitable(i) ? <Boton id={`${idFila(f, i)}-quitar`} variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={(e) => quitar(i, porToque(e))} /> : null}</td> : null}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {puedeAgregar ? <Boton tam="sm" icono="mas" className="mt-2" onClick={agregar}>Agregar fila</Boton> : null}
+        {puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" className="mt-2" onClick={agregar}>Agregar fila</Boton> : null}
       </div>
     );
   }
@@ -373,8 +406,8 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   const cuerpo = subs.filter((s) => !(s.soloLectura && s.tipo !== 'CALCULADA') && s.tipo !== 'SEPARADOR');
   return (
     <div className="grid gap-3">
-      {filas.map((f, i) => <TarjetaFila key={f[ID_FILA] || i} indice={i} idFila={idFila(f, i)} fila={f} cabecera={cabecera} cuerpo={cuerpo} render={render} q={q} puedeQuitar={puedeQuitar} quitar={quitar} ordenable={ordenable} mover={mover} total={filas.length} tieneError={Object.keys(errores).some((k) => k.startsWith(`${q.id}.${i}.`))} />)}
-      {puedeAgregar ? <Boton tam="sm" icono="mas" className="justify-self-start" onClick={agregar}>Agregar fila</Boton> : null}
+      {filas.map((f, i) => <TarjetaFila key={f[ID_FILA] || i} indice={i} idFila={idFila(f, i)} fila={f} cabecera={cabecera} cuerpo={cuerpo} render={render} q={q} puedeQuitar={quitable(i)} quitar={quitar} ordenable={ordenable} mover={mover} total={filas.length} tieneError={Object.keys(errores).some((k) => k.startsWith(`${q.id}.${i}.`))} />)}
+      {puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" className="justify-self-start" onClick={agregar}>Agregar fila</Boton> : null}
     </div>
   );
 };
@@ -396,7 +429,7 @@ const TarjetaFila = ({ indice, idFila, fila, cabecera, cuerpo, render, q, puedeQ
           })}
           {textos.some((s) => String(fila[s.id] || '').length > 160) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => setAbierta(!abierta)}>{abierta ? 'Ver menos' : 'Ver completa'}</button> : null}
         </div>
-        {(puedeQuitar || ordenable) ? <div className="flex gap-1">{ordenable ? <><Boton id={`${idFila}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={indice === 0} onClick={() => mover(indice, -1)} /><Boton id={`${idFila}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={indice === total - 1} onClick={() => mover(indice, 1)} /></> : null}{puedeQuitar ? <Boton variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={() => quitar(indice)} /> : null}</div> : null}
+        {(puedeQuitar || ordenable) ? <div className="flex gap-1">{ordenable ? <><Boton id={`${idFila}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={indice === 0} onClick={() => mover(indice, -1)} /><Boton id={`${idFila}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={indice === total - 1} onClick={() => mover(indice, 1)} /></> : null}{puedeQuitar ? <Boton id={`${idFila}-quitar`} variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={(e) => quitar(indice, porToque(e))} /> : null}</div> : null}
       </div>
       <div className="tarjeta-cuerpo grid gap-3 md:grid-cols-2">
         {cuerpo.map((s) => <div key={s.id} className={s.tipo === 'TEXTO_LARGO' || s.tipo === 'ARCHIVO' ? 'md:col-span-2' : ''}>{render(s, indice, false)}</div>)}
@@ -527,7 +560,9 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
       const sinOrigen = (s) => { const [comp, campo] = String(s.precargarDe).split('.'); return campo !== undefined && i >= filasDe(R, comp).length; };
       const distinto = (s) => { const v = valorEnlace(f[s.id], s); return v !== null && (sinOrigen(s) || v !== valorEnlace(origenEnlace(evActual, s.precargarDe, i), s)); };
       let marcas;
-      if (inicial) marcas = manualesDe(f).concat(subs.filter(distinto).map((s) => s.id));
+      // Al abrir, sin fila de origen solo se infiere en filas sin marcas (datos de una plantilla sin
+      // enlaces); en las demás, lo no marcado era copia del origen, no un dato propio.
+      if (inicial) marcas = manualesDe(f).concat(subs.filter((s) => distinto(s) && !(sinOrigen(s) && Array.isArray(f[MARCA_MANUAL]))).map((s) => s.id));
       else if (!Array.isArray(f[MARCA_MANUAL])) marcas = [];
       else if (editadaAqui && editadas[i] === f && !filasAntes.includes(f)) {
         const previa = filasAntes[i] || {};

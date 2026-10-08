@@ -426,13 +426,15 @@ const EditorInfoContrato = ({ contrato, onCerrar, onGuardado }) => {
   const guardar = async (respuestas) => {
     setGuardando(true);
     try {
-      // Sin _manual ni _fila: no van al contrato ni cuentan como cambio (al abrir se infieren).
-      const nuevaInfo = respuestasAInfo(f, sinClavesInternas(respuestas));
-      const anterior = Object.fromEntries(Object.entries(contrato.info || {}).map(([c, v]) => [c, v && typeof v === 'object' && !Array.isArray(v) ? sinClavesInternas(v) : v]));
+      // Se guarda con _manual (al reabrir se respeta lo vaciado a mano), pero la comparación y
+      // «Cambios» van sin claves internas: así no se registran cambios que no existen.
+      const nuevaInfo = respuestasAInfo(f, sinIdsDeFila(respuestas));
+      const limpia = (info) => Object.fromEntries(Object.entries(info || {}).map(([c, v]) => [c, v && typeof v === 'object' && !Array.isArray(v) ? sinClavesInternas(v) : v]));
+      const anterior = limpia(contrato.info), nueva = limpia(nuevaInfo);
       const parcial = {};
       const capitulos = esRevision ? (f.capitulos || []).map((c) => c.id) : ['contratista'];
-      capitulos.forEach((capId) => { if (!U.igualProfundo(anterior[capId] || {}, nuevaInfo[capId] || {})) parcial[`info.${capId}`] = nuevaInfo[capId]; });
-      const cambios = U.diferencias(Object.fromEntries(capitulos.map((c) => [c, anterior[c] || {}])), Object.fromEntries(capitulos.map((c) => [c, nuevaInfo[c] || {}])));
+      capitulos.forEach((capId) => { if (!U.igualProfundo(anterior[capId] || {}, nueva[capId] || {})) parcial[`info.${capId}`] = nuevaInfo[capId]; });
+      const cambios = U.diferencias(Object.fromEntries(capitulos.map((c) => [c, anterior[c] || {}])), Object.fromEntries(capitulos.map((c) => [c, nueva[c] || {}])));
       if (!Object.keys(parcial).length) { app.avisar('info', 'No hay cambios por guardar'); onCerrar(); return; }
       await DB.actualizarContrato(contrato.id, parcial, { por: app.usuario.id, cambios });
       app.avisar('exito', 'Información del contrato guardada');
