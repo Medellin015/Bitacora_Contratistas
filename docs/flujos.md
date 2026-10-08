@@ -96,26 +96,51 @@ En [make.powerautomate.com](https://make.powerautomate.com) → **Crear con
 Copilot**, pega:
 
 ```text
-When an HTTP request is received (method POST, who can trigger the flow: Anyone, no JSON schema), save the file to OneDrive for Business and return a JSON response. Build it exactly like this:
+When an HTTP request is received (method POST, who can trigger the flow: Anyone, no JSON schema), save the file to OneDrive for Business and return a JSON response. Build it exactly like this and give each action the exact name in quotes:
 1. Initialize variable "codigo" (Integer) = 500. Initialize variable "cuerpo" (Object) = {"ok": false, "mensaje": "No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador."}
-2. Add a Scope named "Intentar" with these actions in order: Compose "Entrada"; HTTP "Leer_documento" (GET, no authentication); HTTP "Leer_contrato" (GET, no authentication); Compose "Contratista"; Compose "Subcarpeta"; Compose "NombreArchivo"; OneDrive for Business "Create file" named "Crear_archivo"; OneDrive for Business "Create share link" named "Crear_vinculo" (link type View, scope Organization); Set variable "Exito_codigo" (codigo = 200); Set variable "Exito_cuerpo" (cuerpo).
-3. Add a Scope named "Capturar" that runs only when "Intentar" has failed or has timed out, with: Filter array "Filtrar_fallo" from result('Intentar') where status is equal to Failed; Set variable "Error_codigo" (codigo); Set variable "Error_cuerpo" (cuerpo).
+2. Add a Scope named "Intentar" with these actions in order: Compose named "Entrada"; built-in HTTP action named "Leer_documento" (GET, no authentication); built-in HTTP action named "Leer_contrato" (GET, no authentication); Compose named "Contratista"; Compose named "Subcarpeta"; Compose named "NombreArchivo"; OneDrive for Business "Create file" named "Crear_archivo"; OneDrive for Business "Create share link" named "Crear_vinculo" (link type View, scope Organization); Set variable action named "Exito_codigo" that sets variable "codigo" to 200; Set variable action named "Exito_cuerpo" that sets variable "cuerpo".
+3. Add a Scope named "Capturar" that runs only when "Intentar" has failed or has timed out, with: Filter array named "Filtrar_fallo" from result('Intentar') where status is equal to Failed; Set variable action named "Error_codigo" that sets variable "codigo"; Set variable action named "Error_cuerpo" that sets variable "cuerpo".
 4. After "Capturar", add a Response action named "Respuesta" that runs when "Capturar" is successful, skipped, failed or timed out, with status code variables('codigo'), headers Content-Type: application/json and Access-Control-Allow-Origin: *, and body variables('cuerpo').
 ```
 
+Envía el texto. Cuando Copilot muestre la propuesta, continúa (*Keep it and
+continue*). Confirma que la conexión de OneDrive para la Empresa tenga la marca
+verde y sea la de la cuenta dueña de la carpeta, y pulsa **Crear flujo**.
+
+**Revisa lo que armó Copilot antes de pegar nada.** No siempre sigue el texto
+al pie de la letra: puede omitir acciones, dejarlas fuera de un ámbito, elegir
+otra acción o cambiar los nombres. Compara con la sección siguiente y corrige a
+mano:
+
+- Son 18 acciones: 2 «Inicializar variable»; el ámbito «Intentar» con 10
+  adentro; el ámbito «Capturar» con 3; y «Respuesta» fuera de los dos. Lo que
+  falte se agrega con el **+** que aparece dentro del recuadro del ámbito (para
+  «Respuesta», con el **+** de debajo de «Capturar»).
+- `Leer_documento` y `Leer_contrato` deben ser la acción «HTTP» (no «Enviar una
+  solicitud HTTP a SharePoint» ni «HTTP con Microsoft Entra ID»).
+  `Crear_archivo` y `Crear_vinculo` deben ser de «OneDrive para la Empresa».
+- Cada acción debe llamarse **exactamente** como aquí, con las mismas
+  mayúsculas y guiones bajos: las expresiones usan esos nombres y, si uno no
+  coincide, el flujo no se deja guardar. Para renombrar, haz clic en la
+  acción; en el panel, haz clic en su nombre (arriba), escribe el nuevo y
+  presiona Enter. Renombra **antes** de pegar las expresiones.
+
 Si Copilot no está disponible, crea el flujo en blanco («Flujo de nube
 instantáneo» → disparador «Cuando se recibe una solicitud HTTP») y agrega las
-mismas acciones a mano. Los nombres importan: las expresiones los usan.
+mismas acciones a mano, con los mismos nombres.
 
 ### Valores de cada paso
 
-Las expresiones (las que llevan paréntesis, como `variables('codigo')`,
-`outputs('NombreArchivo')` o `result('Intentar')`) se ponen así: haz clic en el
-campo, pulsa *fx*, pega la expresión **tal cual** y pulsa **Agregar**. Los
-valores sueltos se escriben directo en el campo, sin *fx*: `POST`, `GET`,
-`200`, `500`, `Failed`, `application/json`, `*` y los nombres de los
-encabezados (`Authorization`, `Content-Type`, `Access-Control-Allow-Origin`).
-Donde dice `/RUTA/DE/TU/CARPETA`, va la ruta de la carpeta raíz.
+**Cómo pegar una expresión.** Todo valor con paréntesis (como
+`variables('codigo')`, `outputs('NombreArchivo')`, `body('Crear_archivo')?['Id']`
+o `result('Intentar')`) es una expresión: haz clic en el campo, pulsa el botón
+*fx* que aparece a su lado (o escribe `/` y elige «Insertar expresión»), pega
+la expresión **tal cual** y pulsa **Agregar**. En el campo debe quedar una
+ficha (un recuadro de color); si ves el texto suelto, quedó como texto y no
+funcionará: bórralo y repite. Los valores sueltos se escriben directo, sin
+*fx*: `POST`, `GET`, `200`, `500`, `Failed`, `application/json`, `*` y los
+nombres de los encabezados (`Authorization`, `Content-Type`,
+`Access-Control-Allow-Origin`).
 
 **1. Cuando se recibe una solicitud HTTP**
 
@@ -184,6 +209,11 @@ concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', 
   ```
   concat('/RUTA/DE/TU/CARPETA/', outputs('Subcarpeta'))
   ```
+  Cambia solo `/RUTA/DE/TU/CARPETA` por la ruta de la carpeta raíz y **deja la
+  barra final**. Con la carpeta del ejemplo queda
+  `concat('/Bitácora/Soportes/', outputs('Subcarpeta'))`. Sin esa barra, los
+  archivos terminan en una carpeta nueva llamada `SoportesP-…`, sin aviso.
+
   Si las subcarpetas no existen, «Crear archivo» las crea al guardar el
   primer archivo. Así funciona hoy el conector, pero Microsoft no lo
   documenta: compruébalo en la prueba (dentro de la carpeta raíz deben
@@ -218,14 +248,20 @@ archivo siga en la carpeta.
 
 `Exito_codigo` (Establecer variable): `codigo` = `200`.
 
-`Exito_cuerpo` (Establecer variable): `cuerpo` =
+`Exito_cuerpo` (Establecer variable): en `cuerpo`, escribe
+`{"ok": true, "url": "", "id": "", "nombre": ""}`. Luego pon el cursor entre
+cada par de comillas vacías e inserta con *fx* esta expresión (sin `@{` ni
+`}`):
+
+- en `url`: `body('Crear_vinculo')?['WebUrl']`
+- en `id`: `body('Crear_archivo')?['Id']`
+- en `nombre`: `body('Crear_archivo')?['Name']`
+
+Al terminar, la pestaña «Vista de código» de la acción debe mostrar:
 
 ```
 {"ok": true, "url": "@{body('Crear_vinculo')?['WebUrl']}", "id": "@{body('Crear_archivo')?['Id']}", "nombre": "@{body('Crear_archivo')?['Name']}"}
 ```
-
-En el diseñador: escribe el JSON y pon cada valor con *fx* dentro de las
-comillas.
 
 **4. Ámbito «Capturar»**
 
@@ -242,7 +278,9 @@ casilla marcada no se puede quitar; por eso va de último).
 if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 403, 500)
 ```
 
-`Error_cuerpo` (Establecer variable): `cuerpo` = `{"ok": false, "mensaje": "<fx>"}`, con esta expresión dentro de las comillas:
+`Error_cuerpo` (Establecer variable): en `cuerpo`, escribe
+`{"ok": false, "mensaje": ""}` y, entre las comillas vacías de `mensaje`,
+inserta con *fx* esta expresión:
 <!-- expr:mensaje_error -->
 ```
 if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 'No se pudo verificar tu sesión o tu permiso sobre este formulario. Recarga la página e inténtalo de nuevo.', 'No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador.')
@@ -273,9 +311,12 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 
 ### Probar y conectar
 
-1. Guarda el flujo y copia la URL del disparador (aparece al guardar por
-   primera vez; empieza por `https://` y termina con `sig=…`). Pégala en
-   **Parámetros → subirArchivo (OneDrive o SharePoint)** y guarda.
+1. Guarda el flujo. Luego haz clic en la tarjeta «Cuando se recibe una
+   solicitud HTTP»: el campo «HTTP URL» (puede decir «Dirección URL HTTP») ya
+   tiene la dirección; solo se llena después del primer guardado. Cópiala con
+   el ícono de copiar que tiene al lado: empieza por `https://` y termina con
+   `sig=…`. Pégala en **Parámetros → subirArchivo (OneDrive o SharePoint)** y
+   pulsa «Guardar cambios». Quien ya tenía la app abierta debe recargarla (F5).
 2. En la app, abre un formulario y adjunta un PDF pequeño. Debe quedar el
    enlace en la fila y el archivo en `<carpeta raíz>/<contrato> - <nombre>/<período>`.
 3. Abre el enlace y verifica que el archivo se ve bien.
@@ -291,27 +332,31 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 
 ### Problemas frecuentes
 
+La app muestra cada error así: «No se pudo subir «archivo»: *mensaje*».
+
 | La app dice… | Causa probable | Qué hacer |
 | --- | --- | --- |
-| «El flujo «subirArchivo» no está configurado en Parámetros» | Falta la URL. | Pégala en Parámetros. |
+| «El flujo «subirArchivo» no está configurado en Parámetros» | Falta la URL o no empieza por `https://`, o la persona abrió la app antes de que se guardara la URL. | Pégala en Parámetros y pulsa «Guardar cambios». Quien ya tenía la app abierta debe recargarla (F5). |
 | «No se pudo conectar con el flujo…» | La respuesta no trae `Access-Control-Allow-Origin` (o lo trae dos veces). También: flujo apagado, «Quién puede desencadenar» distinto de «Cualquiera», o pasaron los 120 s. | Revisa la acción «Respuesta» y el historial de ejecuciones. |
 | «No se pudo verificar tu sesión o tu permiso…» | Falló `Leer_documento` o `Leer_contrato`. Firestore respondió 401 (token), 403 (reglas) o 404, o el proyecto de la URI no es `bitacora-contratistas`. | Mira el código en el historial. Con 403 o 404, la persona debe recargar la página; si sigue, revisa que el contrato sea suyo. |
-| «No se pudo guardar el archivo en OneDrive…» | Ruta con el vínculo para compartir (`https://…`), conexión de otra cuenta, o OneDrive limitó las solicitudes. | Revisa `Crear_archivo` en el historial. |
+| «No se pudo guardar el archivo en OneDrive…» | Falló una acción de «Intentar» que no lee Firestore: ruta con el vínculo para compartir, conexión de otra cuenta, OneDrive limitó las solicitudes, la organización no permite ese tipo de vínculo, o una expresión quedó como texto. | En el historial, abre «Intentar» y mira qué acción quedó en rojo. Si es `Crear_vinculo`, el archivo sí se guardó pero el vínculo no: usa «Organización». Si es `Crear_archivo`, revisa la ruta y la conexión. Si es otra, vuelve a pegar su expresión con *fx*. |
 | El enlace abre, pero el archivo no está en la carpeta raíz | La ruta raíz quedó mal escrita (por ejemplo con «Mis archivos» o «Documentos») y el conector creó otra carpeta. | Busca el archivo por su nombre en OneDrive y corrige `/RUTA/DE/TU/CARPETA`. |
 | «El flujo no devolvió el enlace del archivo…» | No hay acción «Respuesta», tiene «Respuesta asincrónica» activada, o el cuerpo no trae `url`. | Revisa la acción «Respuesta». |
-| «El flujo «subirArchivo» respondió 401» (o 403, 504…) | Respondió la propia plataforma, no el flujo: «Quién puede desencadenar» no es «Cualquiera», falta la licencia Premium o pasaron los 120 s. | Revisa el disparador y el historial de ejecuciones. |
+| «El flujo «subirArchivo» respondió 401» (o 403, 504…) | Respondió la propia plataforma, no el flujo: «Quién puede desencadenar» no es «Cualquiera», falta la licencia Premium, o el flujo no respondió en 120 s (504). | Revisa el disparador y, en el historial, qué acción tardó o falló; los reintentos deben estar en «Ninguno». |
+| «El flujo «subirArchivo» no respondió a tiempo» | Pasaron más de 3 minutos entre subir el archivo y recibir la respuesta: conexión lenta o archivo grande. | Prueba con mejor conexión o con un archivo más liviano. |
 | «Sin conexión: no se pudo guardar el borrador antes de subir…» | La persona no tiene red. | Que revise la conexión y vuelva a intentarlo. |
 | El archivo se abre dañado o contiene texto | Se editó «Contenido del archivo» después de guardar y el diseñador borró `base64ToBinary()`, que hasta entonces solo estaba oculto. | En la pestaña «Vista de código» de `Crear_archivo`, verifica que diga `base64ToBinary(json(triggerBody())?['base64'])`; si no, borra el campo y vuelve a pegar la expresión completa. |
 | El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera o de invitado, o la organización hace caducar los vínculos. | Para externos, usa el ámbito anónimo si tu organización lo permite. Si caducan, el archivo sigue en la carpeta: pide a TI una excepción. |
 
-Si la URL se filtra o hay abuso, cambia la clave del disparador. Power
-Automate no tiene un botón para esto: sigue los pasos de [Volver a generar la
-clave SAS utilizada en los flujos de desencadenador HTTP](https://learn.microsoft.com/es-es/power-automate/regenerate-sas-key)
-(se hace desde la página **Detalles** del flujo con las herramientas de
-desarrollo del navegador, F12; si no te sientes seguro, pide ayuda a TI). Al
-terminar, la URL anterior deja de funcionar: copia la nueva del disparador
-(cambia lo que va después de `sig=`) y pégala en Parámetros. Mientras tanto
-puedes apagar el flujo.
+Si la URL se filtra o hay abuso, **apaga el flujo** de inmediato (Mis flujos →
+el flujo → «Desactivar»): deja de aceptar solicitudes, aunque nadie podrá
+adjuntar hasta que lo resuelvas. Power Automate no tiene un botón para cambiar
+la clave. La salida sencilla: crea una copia con «Guardar como» (la copia tiene
+otra URL), actívala, copia la URL de su disparador, pégala en Parámetros y
+elimina el flujo original. La otra opción es el procedimiento oficial [Volver a
+generar la clave SAS](https://learn.microsoft.com/es-es/power-automate/regenerate-sas-key),
+que usa las herramientas de desarrollo del navegador (F12); si no te sientes
+seguro, pide ayuda a TI.
 
 ## notificar
 
