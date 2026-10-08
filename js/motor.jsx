@@ -135,7 +135,8 @@ const armarRespuestasIniciales = (formulario, ctx, existentes) => {
 const estaVacio = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 const validarValor = (q, v) => {
   if (q.tipo === 'CALCULADA' || q.tipo === 'SEPARADOR') return '';
-  if (estaVacio(v)) return q.obligatoria ? 'Este campo es obligatorio' : '';
+  // Solo espacios cuenta como vacío: un campo obligatorio no se llena con espacios.
+  if (estaVacio(v) || (typeof v === 'string' && !v.trim())) return q.obligatoria ? 'Este campo es obligatorio' : '';
   switch (q.tipo) {
     case 'NUMERO': case 'MONEDA': case 'PORCENTAJE': {
       const n = Number(v);

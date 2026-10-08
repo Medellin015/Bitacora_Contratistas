@@ -397,7 +397,8 @@
         "id": "informe_mensual",
         "nombre": "Informe de ejecución mensual",
         "tipo": "INFORME_MENSUAL",
-        "version": 1,
+        "version": 2,
+        "novedad": "Cada actividad tiene su evidencia (nombre del soporte, enlace o archivo) y en el Word aparece un anexo por cada una.",
         "activo": true,
         "plantillaDescarga": "informe_itm_sif",
         "config": {
@@ -510,6 +511,45 @@
                     "valorSiOculta": "Actividad no ejecutada durante el período reportado",
                     "precargar": "ultimoEnvio",
                     "ayuda": "Una idea por párrafo. Las URL se convierten en hipervínculos en el Word."
+                  },
+                  {
+                    "id": "evidencia",
+                    "etiqueta": "Evidencia (nombre del soporte)",
+                    "tipo": "TEXTO",
+                    "obligatoria": true,
+                    "condicion": {
+                      "pregunta": "fila.porcentaje",
+                      "operador": "distinto",
+                      "valor": 0
+                    },
+                    "valorSiOculta": "",
+                    "ayuda": "El archivo o soporte que prueba la actividad (p. ej. «Acta de reunión 05/10/2026»). En el Word sale en «Anexos del Informe»."
+                  },
+                  {
+                    "id": "evidenciaUrl",
+                    "etiqueta": "Enlace de la evidencia (opcional)",
+                    "tipo": "URL",
+                    "condicion": {
+                      "pregunta": "fila.porcentaje",
+                      "operador": "distinto",
+                      "valor": 0
+                    },
+                    "valorSiOculta": ""
+                  },
+                  {
+                    "id": "evidenciaArchivo",
+                    "etiqueta": "Archivo de la evidencia (opcional)",
+                    "tipo": "ARCHIVO",
+                    "acepta": ".pdf,.docx,.xlsx,.jpg,.jpeg,.png",
+                    "maxArchivos": 1,
+                    "maxMB": 15,
+                    "visibleEnDescarga": false,
+                    "condicion": {
+                      "pregunta": "fila.porcentaje",
+                      "operador": "distinto",
+                      "valor": 0
+                    },
+                    "valorSiOculta": []
                   }
                 ]
               }
@@ -534,7 +574,8 @@
               },
               {
                 "id": "anexos",
-                "etiqueta": "Anexos del informe",
+                "etiqueta": "Otros anexos (opcional)",
+                "ayuda": "Además de la evidencia de cada actividad, que ya sale en «Anexos del Informe».",
                 "tipo": "COMPUESTA",
                 "permiteAgregarFilas": true,
                 "minFilas": 0,
@@ -1185,7 +1226,15 @@
     recuperarClave: (correo) => enviarEnlaceClave(auth, correo),
     cambiarClave: (nueva) => auth.currentUser.updatePassword(nueva),
     cerrarSesion: () => auth.signOut(),
-    idToken: () => (auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve('')),
+    // El SDK reutiliza el token mientras le queden más de 30 s: quien lo manda a un flujo pide un
+    // mínimo de vigencia (vigenciaMs) para que no llegue vencido después de subir un archivo grande.
+    idToken: async (vigenciaMs = 0) => {
+      const u = auth.currentUser;
+      if (!u) return '';
+      if (!vigenciaMs) return u.getIdToken();
+      const r = await u.getIdTokenResult();
+      return new Date(r.expirationTime).getTime() - Date.now() < vigenciaMs ? u.getIdToken(true) : r.token;
+    },
     // El admin crea las cuentas (la del contratista al crear su contrato; revisores y
     // coordinadores en Usuarios) en una app secundaria para no cerrar su propia sesión.
     // La persona define su contraseña con el enlace del correo, que además verifica el correo.
