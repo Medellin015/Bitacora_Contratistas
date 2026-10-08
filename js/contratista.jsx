@@ -426,8 +426,9 @@ const EditorInfoContrato = ({ contrato, onCerrar, onGuardado }) => {
   const guardar = async (respuestas) => {
     setGuardando(true);
     try {
-      const nuevaInfo = respuestasAInfo(f, respuestas);
-      const anterior = contrato.info || {};
+      // Sin _manual ni _fila: no van al contrato ni cuentan como cambio (al abrir se infieren).
+      const nuevaInfo = respuestasAInfo(f, sinClavesInternas(respuestas));
+      const anterior = Object.fromEntries(Object.entries(contrato.info || {}).map(([c, v]) => [c, v && typeof v === 'object' && !Array.isArray(v) ? sinClavesInternas(v) : v]));
       const parcial = {};
       const capitulos = esRevision ? (f.capitulos || []).map((c) => c.id) : ['contratista'];
       capitulos.forEach((capId) => { if (!U.igualProfundo(anterior[capId] || {}, nuevaInfo[capId] || {})) parcial[`info.${capId}`] = nuevaInfo[capId]; });

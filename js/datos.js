@@ -1312,11 +1312,21 @@
     DB.listarFormularios = async () => U.ordenarPor(await A.query('formularios', {}), (f) => f.nombre);
     DB.obtenerFormulario = (id) => A.get('formularios', id);
     DB.guardarFormulario = (f) => { const d = { ...f }; delete d.id; return A.set('formularios', f.id, { ...d, actualizadoEn: ahora() }); };
+    // Solo esos campos (p. ej. versionBase o activo): no reescribe el formulario con una copia vieja.
+    DB.actualizarFormulario = (id, parcial) => A.update('formularios', id, { ...parcial, actualizadoEn: ahora() });
+    // Última versión con copia en versiones/ (sobrevive a borrar el formulario).
+    const ultimaVersionPublicada = async (id) => {
+      try { const [c] = await A.subQuery('formularios', id, 'versiones', { orderBy: ['version', 'desc'], limit: 1 }); return c ? Number(c.version) || 0 : 0; } catch (e) { return 0; }
+    };
+    // La versión publicada siempre avanza (también si otra sesión publicó antes) y nunca reutiliza el
+    // número de una copia ya publicada (versiones/N es inmutable).
     DB.publicarVersion = async (f, version = (Number(f.version) || 0) + 1) => {
       const d = { ...f }; delete d.id;
-      await A.set('formularios', f.id, { ...d, version, actualizadoEn: ahora() });
-      await A.subSet('formularios', f.id, 'versiones', String(version), { ...d, version, publicadoEn: ahora() });
-      return version;
+      const actual = await A.get('formularios', f.id).catch(() => null);
+      const v = Math.max(Number(version) || 1, (await ultimaVersionPublicada(f.id)) + 1, ((actual && Number(actual.version)) || 0) + 1);
+      await A.subSet('formularios', f.id, 'versiones', String(v), { ...d, version: v, publicadoEn: ahora() });
+      await A.set('formularios', f.id, { ...d, version: v, actualizadoEn: ahora() });
+      return v;
     };
     DB.eliminarFormulario = (id) => A.delete('formularios', id);
     DB.listarCatalogos = () => A.query('catalogos', {});
@@ -1388,7 +1398,12 @@
     // --- Semillas iniciales (admin, proyecto nuevo) ---
     DB.sembrarBase = async () => {
       const existentes = await DB.listarFormularios();
-      for (const f of FORMULARIOS_SEMILLA) if (!existentes.some((x) => x.id === f.id)) await DB.guardarFormulario({ ...U.clonar(f), versionBase: f.version });
+      for (const f of FORMULARIOS_SEMILLA) {
+        if (existentes.some((x) => x.id === f.id)) continue;
+        // Si se borró y ya tenía versiones publicadas, sigue después de la última (no retrocede).
+        const version = Math.max(Number(f.version) || 1, (await ultimaVersionPublicada(f.id)) + 1);
+        await DB.guardarFormulario({ ...U.clonar(f), version, versionBase: f.version });
+      }
       const catalogos = await DB.listarCatalogos();
       for (const id of Object.keys(CATALOGOS_SEMILLA)) if (!catalogos.some((c) => c.id === id)) await DB.guardarCatalogo(id, U.clonar(CATALOGOS_SEMILLA[id]));
       const p = await A.get('parametros', 'app');
