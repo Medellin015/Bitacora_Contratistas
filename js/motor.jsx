@@ -191,6 +191,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
       try {
         const r = await subir(a, q);
         const nuevo = { nombre: r.nombre || a.name, url: r.url || '', id: r.id || '', tamano: a.size };
+        if (motor && motor.guardarYa) motor.guardarYa();   // el archivo ya está en OneDrive: al borrador sin esperar
         onCambio((vigente) => [...(Array.isArray(vigente) ? vigente : []), nuevo], { archivo: a.name });
         if (r.simulado) app.avisar('info', 'Archivo simulado (modo demostración): no se subió a SharePoint');
       } catch (e) { app.avisar(e.code === 'flujo-sin-url' ? 'alerta' : 'error', `No se pudo subir «${a.name}»: ${e.message}`); }
@@ -621,7 +622,7 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
  *  onEnviar(respuestasFinales) · onVistaPrevia(respuestasFinales) · textoEnviar · soloLectura
  *  capituloInicial
  */
-const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas }) => {
+const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
@@ -633,10 +634,12 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const respuestasRef = useRef(respuestas);
   respuestasRef.current = respuestas;
   const [subidas, setSubidas] = useState({});
+  const ahoraRef = useRef(false);   // el próximo autoguardado va sin esperar (se adjuntó un archivo)
   const estadoMotor = useMemo(() => ({
     subidas: (clave) => subidas[clave] || 0,
     marcarSubida: (clave, d) => setSubidas((m) => { const n = (m[clave] || 0) + d; const c = { ...m }; if (n > 0) c[clave] = n; else delete c[clave]; return c; }),
     leer: (id) => respuestasRef.current[id],
+    guardarYa: () => { ahoraRef.current = true; },
   }), [subidas]);
   const [intentoEnvio, setIntentoEnvio] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -648,17 +651,43 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const reloj = useReloj(10000);
   const idBase = `f-${formulario.id}`;
 
-  // Autoguardado con retardo de 3 s (solo si hay algo editable).
+  // Autoguardado con retardo de 3 s (solo si hay algo editable); sin espera al adjuntar un archivo.
+  // Lo pendiente también se guarda al salir del formulario, salvo que ya se haya enviado (el envío
+  // borra el borrador). Mientras se envía no se autoguarda; si el envío no se hace, se guarda al final.
   const guardarRef = useRef(onGuardar);
   guardarRef.current = onGuardar;
+  const capituloRef = useRef(capituloId);
+  capituloRef.current = capituloId;
+  const guardadasRef = useRef(respuestas);   // las últimas respuestas mandadas a guardar
+  const pendienteRef = useRef(null);         // guardado programado que aún no se hace
+  const temporizadorRef = useRef(null);
+  const enviandoRef = useRef(false);
   const primera = useRef(true);
   useEffect(() => {
-    if (onCambioRespuestas) onCambioRespuestas(respuestas);
     if (primera.current) { primera.current = false; return undefined; }
     if (!guardarRef.current || soloLectura) return undefined;
-    const t = setTimeout(() => guardarRef.current(respuestas, capituloId), 3000);
-    return () => clearTimeout(t);
+    const guardar = () => {
+      if (enviandoRef.current) return;
+      pendienteRef.current = null;
+      guardadasRef.current = respuestas;
+      guardarRef.current(respuestas, capituloRef.current);
+    };
+    pendienteRef.current = guardar;
+    temporizadorRef.current = setTimeout(guardar, ahoraRef.current ? 0 : 3000);
+    ahoraRef.current = false;
+    return () => clearTimeout(temporizadorRef.current);
   }, [respuestas]); // eslint-disable-line
+  useEffect(() => () => { if (pendienteRef.current && guardarRef.current) pendienteRef.current(); }, []);
+  useEffect(() => { if (onCambioRespuestas) onCambioRespuestas(respuestas, capituloId); }, [respuestas, capituloId]); // eslint-disable-line
+  // Subidas en curso: la página lo usa para confirmar «Salir»; cerrar o recargar la pestaña pide confirmación.
+  const haySubidas = Object.keys(subidas).length > 0;
+  useEffect(() => { if (onCambioSubidas) onCambioSubidas(Object.keys(subidas).length); }, [subidas]); // eslint-disable-line
+  useEffect(() => {
+    if (!haySubidas) return undefined;
+    const avisar = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', avisar);
+    return () => window.removeEventListener('beforeunload', avisar);
+  }, [haySubidas]);
 
   // Si la plantilla cambia con el formulario abierto («Actualizar datos»), se infieren las marcas
   // sobre lo que ya hay, como al abrir. Solo si cambió de verdad: recargar crea objetos nuevos
@@ -759,7 +788,15 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     setIntentoEnvio(true);
     if (Object.keys(errores).length) { app.avisar('alerta', `Hay ${Object.keys(errores).length} ${U.plural(Object.keys(errores).length, 'campo por corregir', 'campos por corregir')}`); irAPrimerError(); return; }
     setEnviando(true);
-    try { await onEnviar(respuestasFinales()); } finally { setEnviando(false); }
+    enviandoRef.current = true;
+    let enviado = false;
+    try { enviado = (await onEnviar(respuestasFinales())) === true; }
+    finally {
+      enviandoRef.current = false;
+      setEnviando(false);
+      if (enviado) { clearTimeout(temporizadorRef.current); pendienteRef.current = null; }
+      else if (pendienteRef.current) pendienteRef.current();
+    }
   };
   // «Traer del mes anterior» (solo preguntas marcadas y si el formulario lo permite).
   const traer = (formulario.config && formulario.config.precargarUltimoEnvio && ultimoEnvio && ultimoEnvio.respuestas) ? (id, indice, subId) => {
@@ -788,8 +825,10 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const visiblesCap = capitulos.filter(capituloVisible);
   const textoGuardado = () => {
     if (!estadoGuardado) return '';
+    if (estadoGuardado.nota) return estadoGuardado.nota;
     if (estadoGuardado.guardando) return 'Guardando…';
     if (estadoGuardado.error) return `Sin guardar: ${estadoGuardado.error}`;
+    if (onGuardar && respuestas !== guardadasRef.current) return 'Cambios sin guardar';
     if (estadoGuardado.fecha) return `Guardado ${U.tiempoRelativo(estadoGuardado.fecha)}`;
     return 'Sin cambios';
   };
@@ -826,7 +865,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         </div>
         {!soloLectura ? (
           <div className="barra-fija">
-            <div className="text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
+            <div className="text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : textoGuardado() === 'Cambios sin guardar' ? 'editar' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
             <div className="flex gap-2 flex-wrap">
               {acciones}
               {onVistaPrevia ? <Boton icono="ojo" onClick={() => onVistaPrevia(respuestasFinales())}>Vista previa</Boton> : null}

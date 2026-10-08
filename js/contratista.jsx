@@ -523,6 +523,11 @@ const PaginaFormulario = () => {
   const [decisionBorrador, setDecisionBorrador] = useState(null); // null | 'continuar' | 'nuevo'
   const ultimoGuardado = useRef(null);
   const respuestasActuales = useRef(null);   // lo que hay en pantalla (MotorFormulario.onCambioRespuestas)
+  const capituloActual = useRef(null);       // el capítulo en pantalla, para el borrador que se guarda al subir
+  const hayCambios = useRef(false);          // se editó algo desde que se abrió
+  const subiendo = useRef(0);                // archivos subiendo (MotorFormulario.onCambioSubidas)
+  const montado = useRef(true);
+  useEffect(() => () => { montado.current = false; }, []);
   const { datos, cargando, error } = useCarga(async () => {
     if (!formulario || !contrato) return null;
     const uid = app.usuario.id;
@@ -600,18 +605,27 @@ const PaginaFormulario = () => {
   };
   const subir = async (archivo, pregunta) => {
     // El flujo lee el borrador (dueño, contrato, formulario y período) para ubicar el archivo: se
-    // guarda antes de subir con lo que hay en pantalla, aunque todavía no se haya autoguardado.
-    // Sin flujo configurado no hace falta (subirArchivo avisa de una vez). Sin red, Firestore no
-    // confirma la escritura: a los 15 s se avisa en vez de dejar la subida girando.
-    const doc = !esCorreccion && respuestasActuales.current
-      ? { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas: respuestasActuales.current, capituloActual: (ultimoGuardado.current && ultimoGuardado.current.capituloActual) || null }
-      : ultimoGuardado.current;
-    if (doc && (window.MODO_DEMO || Flujos.disponible('subirArchivo'))) {
+    // guarda antes de subir con lo que hay en pantalla, aunque todavía no se haya autoguardado. En
+    // corrección lee el envío. Sin flujo configurado no hace falta (subirArchivo avisa de una vez).
+    // Sin red, Firestore no confirma la escritura: a los 15 s se avisa en vez de dejar la subida girando.
+    if (!esCorreccion && respuestasActuales.current && (window.MODO_DEMO || Flujos.disponible('subirArchivo'))) {
+      const doc = { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas: respuestasActuales.current, capituloActual: capituloActual.current || null };
       ultimoGuardado.current = doc;
-      const guardado = await Promise.race([DB.guardarBorrador(idBorrador, doc).then(() => true, () => false), U.esperar(15000).then(() => null)]);
+      const guardado = await Promise.race([DB.guardarBorrador(idBorrador, doc).then(() => true, (e) => e || new Error('Error desconocido')), U.esperar(15000).then(() => null)]);
       if (guardado === null) { const e = new Error('Sin conexión: no se pudo guardar el borrador antes de subir. Revisa la red e inténtalo de nuevo'); e.code = 'sin-red'; throw e; }
+      if (guardado !== true) {
+        console.warn('No se pudo guardar el borrador antes de subir:', guardado);
+        const e = new Error(`No se pudo guardar el borrador antes de subir: ${DB.traducirError(guardado)}`); e.code = 'borrador-sin-guardar'; throw e;
+      }
+      if (!montado.current) { const e = new Error('Saliste del formulario antes de que empezara la subida; no se subió'); e.code = 'cancelado'; throw e; }
     }
     return Flujos.subirArchivo({ origen: esCorreccion ? 'envio' : 'borrador', docId: esCorreccion ? envio.id : idBorrador, preguntaId: pregunta.id, archivo, maxMB: pregunta.maxMB || 15 });
+  };
+  // Salir con un archivo subiendo, o de una corrección con cambios (no tiene borrador), se confirma.
+  const salir = async () => {
+    if (subiendo.current > 0 && !(await app.confirmar({ titulo: 'Hay un archivo subiendo', mensaje: 'Si sales ahora, el archivo que se está subiendo no quedará adjunto.', textoOk: 'Salir' }))) return;
+    if (esCorreccion && hayCambios.current && !(await app.confirmar({ titulo: 'Salir sin reenviar', mensaje: 'En una corrección los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.', textoOk: 'Salir' }))) return;
+    app.navegar('#/inicio');
   };
   const armarDocumentos = async (respuestas, voBoTexto) => {
     const foto = Descargas.armarFoto(formulario, respuestas, { catalogos: app.catalogos, parametros: app.parametros });
@@ -647,7 +661,7 @@ const PaginaFormulario = () => {
         app.avisar('exito', 'Corrección reenviada');
         app.recargarContadores();
         app.navegar('#/envios');
-        return;
+        return true;
       }
       const flujo = (formulario.config && formulario.config.flujoEstados) || [];
       const consecutivo = Number(respuestas.numeroInforme || respuestas.numeroCuenta) || consecutivoSugerido;
@@ -666,6 +680,7 @@ const PaginaFormulario = () => {
       app.avisar('exito', `${formulario.nombre} enviado · No. ${consecutivo}`);
       app.recargarContadores();
       app.navegar('#/envios');
+      return true;
     } catch (e) {
       console.error(e);
       app.avisar('error', e.code === 'permission-denied' ? 'No se pudo enviar: ya existe un envío para este período, la ventana cerró o no tienes permiso.' : DB.traducirError(e));
@@ -678,9 +693,11 @@ const PaginaFormulario = () => {
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
       <MotorFormulario key={`${formulario.id}-${decisionBorrador}`} formulario={formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
-        subir={subir} onGuardar={esLectura ? null : guardarBorrador} estadoGuardado={estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
+        subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : undefined}
-        acciones={<Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>} onCambioRespuestas={(r) => { respuestasActuales.current = r; }} />
+        acciones={<Boton variante="fantasma" onClick={salir}>Salir</Boton>}
+        onCambioRespuestas={(r, c) => { if (respuestasActuales.current && r !== respuestasActuales.current) hayCambios.current = true; respuestasActuales.current = r; capituloActual.current = c; }}
+        onCambioSubidas={(n) => { subiendo.current = n; }} />
       {previa ? <VistaPreviaDocx titulo={`Vista previa · ${formulario.nombre}`} generar={previa.generar} onCerrar={() => setPrevia(null)} /> : null}
     </div>
   );
