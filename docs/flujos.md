@@ -109,8 +109,13 @@ mismas acciones a mano. Los nombres importan: las expresiones los usan.
 
 ### Valores de cada paso
 
-Pega cada expresión en el editor de expresiones (*fx*) del campo, **tal
-cual**. Donde dice `/RUTA/DE/TU/CARPETA`, va la ruta de la carpeta raíz.
+Las expresiones (las que llevan paréntesis, como `variables('codigo')`,
+`outputs('NombreArchivo')` o `result('Intentar')`) se ponen así: haz clic en el
+campo, pulsa *fx*, pega la expresión **tal cual** y pulsa **Agregar**. Los
+valores sueltos se escriben directo en el campo, sin *fx*: `POST`, `GET`,
+`200`, `500`, `Failed`, `application/json`, `*` y los nombres de los
+encabezados (`Authorization`, `Content-Type`, `Access-Control-Allow-Origin`).
+Donde dice `/RUTA/DE/TU/CARPETA`, va la ruta de la carpeta raíz.
 
 **1. Cuando se recibe una solicitud HTTP**
 
@@ -224,8 +229,9 @@ comillas.
 
 **4. Ámbito «Capturar»**
 
-Configuración → Ejecutar después de: «Intentar» **ha fallado** y **ha agotado
-el tiempo de espera** (desmarca «es correcto»).
+Configuración → Ejecutar después de: en «Intentar», marca **Error** y **Ha
+agotado el tiempo de espera**, y al final desmarca **Correcto** (la última
+casilla marcada no se puede quitar; por eso va de último).
 
 `Filtrar_fallo` (Filtrar matriz): Desde = `result('Intentar')` · condición:
 `item()?['status']` es igual a `Failed`.
@@ -244,9 +250,10 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 
 **5. Respuesta** (fuera de los ámbitos)
 
-- Configuración → Ejecutar después de: «Capturar» **es correcto**, **se ha
-  omitido**, **ha fallado** y **ha agotado el tiempo de espera**. Así responde
-  siempre, salga bien o mal.
+- Configuración → Ejecutar después de: en «Capturar», marca las cuatro
+  casillas: **Correcto**, **Ha agotado el tiempo de espera**, **Se ha omitido**
+  y **Error**. Así responde siempre, salga bien o mal (si falta «Se ha
+  omitido», en las subidas correctas no hay respuesta).
 - Código de estado: `variables('codigo')` · Cuerpo: `variables('cuerpo')`.
 - Encabezados: `Content-Type` = `application/json` y
   `Access-Control-Allow-Origin` = `*`.
@@ -255,12 +262,14 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 **6. Configuración de las acciones**
 
 - En `Leer_documento`, `Leer_contrato`, `Crear_archivo` y `Crear_vinculo`:
-  Configuración → Directiva de reintentos: **Ninguno**. Los reintentos por
-  defecto pueden pasar de los 120 s; si algo falla, la persona lo vuelve a
+  Configuración → Redes → Directiva de reintentos: **Ninguno**. Los reintentos
+  por defecto pueden pasar de los 120 s; si algo falla, la persona lo vuelve a
   intentar.
 - Opcional, para ver en rojo las ejecuciones con error: después de
-  «Respuesta», una condición `codigo` mayor o igual que 500 con «Terminar»
-  (estado: Error) en la rama «Sí». Nunca antes de «Respuesta».
+  «Respuesta», agrega una «Condición». Valor izquierdo: `variables('codigo')`
+  (con *fx*). Operador: **es mayor o igual que** (puede verse como **≥**).
+  Valor derecho: `500`. En la rama **True** agrega «Terminar» y deja el estado
+  que trae por defecto (*Failed*). Nunca antes de «Respuesta».
 
 ### Probar y conectar
 
@@ -273,10 +282,12 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 4. En DevTools (F12) → Red, abre la solicitud al flujo: en la respuesta debe
    haber **un solo** `Access-Control-Allow-Origin`. Si sale dos veces, quítalo
    de la acción «Respuesta».
-5. Cuando funcione, activa **Entradas seguras** y **Salidas seguras**
-   (Configuración → Seguridad) en el disparador, `Entrada`, `Leer_documento`,
-   `Leer_contrato` y `Crear_archivo`. Así el token y el archivo no quedan
-   visibles en el historial de ejecuciones.
+5. Cuando funcione, activa la seguridad (Configuración → Seguridad):
+   **Entradas seguras** y **Salidas seguras** en el disparador,
+   `Leer_documento`, `Leer_contrato`, `Crear_archivo` y `Filtrar_fallo`. En
+   `Entrada` (Redactar) solo existe **Entradas seguras**: actívala; también
+   oculta sus salidas. Así el token y el archivo no quedan visibles en el
+   historial de ejecuciones.
 
 ### Problemas frecuentes
 
@@ -291,8 +302,14 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 | El archivo se abre dañado o contiene texto | Se editó «Contenido del archivo» después de guardar y el diseñador borró `base64ToBinary()`, que hasta entonces solo estaba oculto. | En la pestaña «Vista de código» de `Crear_archivo`, verifica que diga `base64ToBinary(json(triggerBody())?['base64'])`; si no, borra el campo y vuelve a pegar la expresión completa. |
 | El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera o de invitado, o la organización hace caducar los vínculos. | Para externos, usa el ámbito anónimo si tu organización lo permite. Si caducan, el archivo sigue en la carpeta: pide a TI una excepción. |
 
-Si la URL se filtra o hay abuso, regenera la clave del disparador (menú del
-flujo → regenerar la clave de acceso) y pega la URL nueva en Parámetros.
+Si la URL se filtra o hay abuso, cambia la clave del disparador. Power
+Automate no tiene un botón para esto: sigue los pasos de [Volver a generar la
+clave SAS utilizada en los flujos de desencadenador HTTP](https://learn.microsoft.com/es-es/power-automate/regenerate-sas-key)
+(se hace desde la página **Detalles** del flujo con las herramientas de
+desarrollo del navegador, F12; si no te sientes seguro, pide ayuda a TI). Al
+terminar, la URL anterior deja de funcionar: copia la nueva del disparador
+(cambia lo que va después de `sig=`) y pégala en Parámetros. Mientras tanto
+puedes apagar el flujo.
 
 ## notificar
 
