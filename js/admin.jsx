@@ -527,7 +527,7 @@ const actualizarABase = async (app, { base, actual }) => {
 // «Mantener mi versión»: el formulario queda como está y se marca al día con la plantilla base.
 const mantenerVersion = async (app, { base, actual }) => {
   if (!(await app.confirmar({ titulo: `Mantener «${actual.nombre}»`, mensaje: `Tu formulario queda como está (no recibe los cambios de la plantilla base ${base.version}) y el aviso desaparece.`, textoOk: 'Mantener' }))) return;
-  try { await DB.guardarFormulario({ ...actual, versionBase: Number(base.version) }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }
+  try { await DB.actualizarFormulario(actual.id, { versionBase: Number(base.version) }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }
 };
 const AvisosPlantillaBase = ({ className = 'mb-3' }) => {
   const app = useApp();
@@ -553,12 +553,13 @@ const validarEsquema = (f) => {
       const ref = `${c.id}/${q.id || `#${j + 1}`}`;
       if (!q.id) p.push(`${ref}: sin id`);
       else if (ids.has(q.id)) p.push(`${ref}: id repetido`); else ids.add(q.id);
+      if (q.id && String(q.id).startsWith('_')) p.push(`${ref}: los ids que empiezan por «_» están reservados`);
       if (!q.etiqueta && q.tipo !== 'SEPARADOR') p.push(`${ref}: sin etiqueta`);
       if (!TIPOS_PREGUNTA.includes(q.tipo)) p.push(`${ref}: tipo desconocido «${q.tipo}»`);
       if (q.tipo === 'COMPUESTA') {
         if (!Array.isArray(q.subpreguntas) || !q.subpreguntas.length) p.push(`${ref}: COMPUESTA sin subpreguntas`);
         const sids = new Set();
-        (q.subpreguntas || []).forEach((s) => { if (!s.id) p.push(`${ref}: subpregunta sin id`); else if (sids.has(s.id)) p.push(`${ref}.${s.id}: id repetido`); else sids.add(s.id); if (!TIPOS_PREGUNTA.includes(s.tipo)) p.push(`${ref}.${s.id}: tipo desconocido`); });
+        (q.subpreguntas || []).forEach((s) => { if (!s.id) p.push(`${ref}: subpregunta sin id`); else if (sids.has(s.id)) p.push(`${ref}.${s.id}: id repetido`); else sids.add(s.id); if (s.id && String(s.id).startsWith('_')) p.push(`${ref}.${s.id}: los ids que empiezan por «_» están reservados (_fila, _manual)`); if (!TIPOS_PREGUNTA.includes(s.tipo)) p.push(`${ref}.${s.id}: tipo desconocido`); });
       }
       if ((q.tipo === 'SELECCION_UNICA' || q.tipo === 'SELECCION_MULTIPLE') && !Array.isArray(q.opciones) && !q.origenOpciones) p.push(`${ref}: faltan opciones u origenOpciones`);
     });
@@ -569,6 +570,12 @@ const validarEsquema = (f) => {
   const ORIGEN_NO_SIMPLE = ['ARCHIVO', 'SELECCION_MULTIPLE', 'COMPUESTA', 'SEPARADOR'];
   Object.values(compuestas).forEach((q) => {
     if (q.filasDe && (!compuestas[q.filasDe] || q.filasDe === q.id)) p.push(`${q.id}: filasDe «${q.filasDe}» no es otra pregunta compuesta`);
+    // Ciclo de filasDe (A → B → A): ninguna tendría filas. Se avisa una vez por ciclo.
+    const cadena = [q.id];
+    let sig = q.filasDe;
+    while (sig && compuestas[sig] && !cadena.includes(sig)) { cadena.push(sig); sig = compuestas[sig].filasDe; }
+    if (sig === q.id && cadena.length > 1 && q.id === [...cadena].sort()[0]) p.push(`${q.id}: filasDe forma un ciclo (${[...cadena, q.id].join(' → ')})`);
+    if (q.ordenable && (q.filasDe || q.origenFilas)) p.push(`${q.id}: «ordenable» no aplica con ${q.filasDe ? 'filasDe' : 'origenFilas'} (las filas siguen el orden de su origen)`);
     (q.subpreguntas || []).filter((s) => s.precargarDe).forEach((s) => {
       const [origen, campo] = String(s.precargarDe).split('.');
       const fuente = campo === undefined ? primerNivel[origen] : compuestas[origen] && (compuestas[origen].subpreguntas || []).find((x) => x.id === campo);
@@ -622,7 +629,7 @@ const PaginaAdminFormularios = () => {
   const app = useApp();
   const [editando, setEditando] = useState(null);
   const nuevo = () => setEditando({ id: 'nuevo_formulario', nombre: 'Nuevo formulario', tipo: 'GENERICO', version: 1, activo: true, plantillaDescarga: 'generica', config: { requiereVentana: true, limiteMensual: 1, flujoEstados: ['contratista', 'revisor'], vistaPrevia: true, precargarUltimoEnvio: false }, capitulos: [{ id: 'datos', nombre: 'Datos', orden: 1, preguntas: [{ id: 'fecha', etiqueta: 'Fecha', tipo: 'FECHA', obligatoria: true, porDefecto: 'hoy' }] }] });
-  const alternar = async (f, campo) => { try { await DB.guardarFormulario({ ...f, [campo]: !f[campo] }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); } };
+  const alternar = async (f, campo) => { try { await DB.actualizarFormulario(f.id, { [campo]: !f[campo] }); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); } };
   const eliminar = async (f) => {
     if (!(await app.confirmar({ titulo: 'Eliminar formulario', mensaje: `Se elimina «${f.nombre}». Los envíos existentes conservan su foto, pero ya no podrán descargarse con la plantilla.`, textoOk: 'Eliminar', peligro: true }))) return;
     try { await DB.eliminarFormulario(f.id); app.recargarTodo(); } catch (e) { app.avisar('error', DB.traducirError(e)); }

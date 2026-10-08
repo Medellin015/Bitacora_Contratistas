@@ -204,8 +204,10 @@ const Combobox = ({ opciones, valor, onCambio, placeholder = 'Buscar…', etique
     return opciones.filter((o) => U.sinTildes(`${etiquetaDe(o)} ${detalleDe ? detalleDe(o) : ''} ${o.grupo || ''}`).toLowerCase().includes(t));
   }, [opciones, texto, etiquetaDe, detalleDe]);
   const elegir = (o) => { onCambio(o ? o.valor : ''); setAbierto(false); setTexto(''); };
+  // Al abrir se resalta lo elegido (un Enter no repite una opción vieja).
+  const abrir = () => { if (disabled || abierto) return; const k = filtradas.findIndex((o) => String(o.valor) === String(valor)); setResaltada(k >= 0 ? k : 0); setAbierto(true); };
   const teclado = (e) => {
-    if (!abierto && (e.key === 'ArrowDown' || e.key === 'Enter')) { setAbierto(true); e.preventDefault(); return; }
+    if (!abierto && (e.key === 'ArrowDown' || e.key === 'Enter')) { abrir(); e.preventDefault(); return; }
     if (e.key === 'ArrowDown') { setResaltada((r) => Math.min(r + 1, filtradas.length - 1)); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { setResaltada((r) => Math.max(r - 1, 0)); e.preventDefault(); }
     else if (e.key === 'Enter') { if (filtradas[resaltada]) elegir(filtradas[resaltada]); e.preventDefault(); }
@@ -229,7 +231,7 @@ const Combobox = ({ opciones, valor, onCambio, placeholder = 'Buscar…', etique
       <div className="relative">
         <Entrada id={id} role="combobox" aria-expanded={abierto} aria-controls={id ? `${id}-lista` : undefined} aria-autocomplete="list" invalido={invalido} disabled={disabled} placeholder={placeholder}
           value={abierto && !(movil && hojaMovil) ? texto : (seleccionada ? etiquetaDe(seleccionada) : '')}
-          onFocus={() => { if (!disabled) setAbierto(true); }} onClick={() => { if (!disabled) setAbierto(true); }}
+          onFocus={(e) => { if (!e.currentTarget.dataset.sinAbrir) abrir(); }} onClick={abrir}
           onChange={(e) => { setTexto(e.target.value); setResaltada(0); if (!abierto) setAbierto(true); }} onKeyDown={teclado} readOnly={movil && hojaMovil} />
         <Icono nombre="abajo" className="absolute right-3 top-1/2 -translate-y-1/2 texto-3 pointer-events-none" tam={16} />
       </div>
@@ -237,8 +239,8 @@ const Combobox = ({ opciones, valor, onCambio, placeholder = 'Buscar…', etique
     </div>
   );
 };
-const Segmentado = ({ opciones, valor, onCambio, etiqueta }) => (
-  <div className="segmentado" role="group" aria-label={etiqueta}>
+const Segmentado = ({ opciones, valor, onCambio, etiqueta, id }) => (
+  <div className="segmentado" role="group" aria-label={etiqueta} id={id}>
     {opciones.map((o) => <button type="button" key={String(o.valor)} className={String(o.valor) === String(valor) ? 'activo' : ''} aria-pressed={String(o.valor) === String(valor)} onClick={() => onCambio(o.valor)}>{o.etiqueta}</button>)}
   </div>
 );

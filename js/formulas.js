@@ -346,7 +346,12 @@
       revisar(q, null, q.id);
       if (q.tipo === 'COMPUESTA') (q.subpreguntas || []).forEach((s) => revisar(s, q, `${q.id}.${s.id}`));
     });
-    // Ciclos (DFS sobre el grafo de dependencias de las calculadas).
+    // Las precargas (precargarDe) también son dependencias: en un ciclo el valor no converge.
+    Object.values(preguntas).forEach((q) => {
+      if (q.tipo !== 'COMPUESTA') return;
+      (q.subpreguntas || []).forEach((s) => { if (s.precargarDe && s.tipo !== 'CALCULADA') { const k = `${q.id}.${s.id}`; nodos[k] = (nodos[k] || []).concat([String(s.precargarDe)]); } });
+    });
+    // Ciclos (DFS sobre el grafo de dependencias de las calculadas y las precargas).
     const estado = {};
     const visitar = (n, pila) => {
       if (estado[n] === 2) return;

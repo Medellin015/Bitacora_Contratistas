@@ -36,11 +36,15 @@ const resolverPorDefecto = (token, ctx) => {
 // fila: ubica la fila aunque se muevan o quiten otras mientras sube un archivo.
 const MARCA_MANUAL = '_manual';
 const ID_FILA = '_fila';
-const sinIdsDeFila = (R) => {
+const quitarDeFilas = (R, claves) => {
   const r = { ...R };
-  Object.keys(r).forEach((k) => { if (Array.isArray(r[k]) && r[k].some((f) => f && typeof f === 'object' && ID_FILA in f)) r[k] = r[k].map((f) => { if (!f || typeof f !== 'object' || !(ID_FILA in f)) return f; const c = { ...f }; delete c[ID_FILA]; return c; }); });
+  const tiene = (f) => f && typeof f === 'object' && claves.some((c) => c in f);
+  Object.keys(r).forEach((k) => { if (Array.isArray(r[k]) && r[k].some(tiene)) r[k] = r[k].map((f) => { if (!tiene(f)) return f; const c = { ...f }; claves.forEach((x) => delete c[x]); return c; }); });
   return r;
 };
+const sinIdsDeFila = (R) => quitarDeFilas(R, [ID_FILA]);
+// Info del contrato: sin claves internas; al abrir, las marcas se infieren de nuevo.
+const sinClavesInternas = (R) => quitarDeFilas(R, [ID_FILA, MARCA_MANUAL]);
 const valorVacioDe = (q) => (q.tipo === 'SELECCION_MULTIPLE' || q.tipo === 'ARCHIVO' ? [] : '');
 const filaNueva = (q, ctx, origen) => {
   const fila = { [ID_FILA]: U.idAleatorio().slice(0, 10) };
@@ -52,10 +56,21 @@ const filaNueva = (q, ctx, origen) => {
   });
   return fila;
 };
+// Ids de fila únicos en una compuesta: una fila sin id o con uno repetido recibe uno nuevo.
+const conIdsUnicos = (filas) => {
+  const vistos = new Set();
+  return filas.map((f) => {
+    if (f[ID_FILA] && !vistos.has(f[ID_FILA])) { vistos.add(f[ID_FILA]); return f; }
+    const id = U.idAleatorio().slice(0, 10);
+    vistos.add(id);
+    return { ...f, [ID_FILA]: id };
+  });
+};
 // Mezcla respuestas existentes con valores por defecto; filas desde origenFilas se
 // reconstruyen (conservando lo editable por número de fila o por posición).
 const armarRespuestasIniciales = (formulario, ctx, existentes) => {
   const R = existentes ? U.clonar(existentes) : {};
+  const ordenPrevio = {};   // compuesta con origenFilas → posición guardada de cada fila (-1: nueva)
   (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => {
     if (q.tipo === 'SEPARADOR' || q.tipo === 'CALCULADA') return;
     if (q.tipo === 'COMPUESTA') {
@@ -63,20 +78,33 @@ const armarRespuestasIniciales = (formulario, ctx, existentes) => {
       if (q.origenFilas) {
         const origen = resolverPorDefecto(q.origenFilas, ctx);
         const lista = Array.isArray(origen) ? origen : [];
+        // Primero por número y luego por posición, sin repetir filas guardadas: dos filas con el
+        // mismo número no comparten lo guardado de una sola.
+        const usadas = new Set();
+        const porNumero = lista.map((o) => {
+          const f = previas && o && o.numero != null ? previas.find((x) => x && !usadas.has(x) && String(x.numero) === String(o.numero)) : null;
+          if (f) usadas.add(f);
+          return f || null;
+        });
+        const indices = [];
         R[q.id] = lista.map((o, i) => {
           const base = filaNueva(q, ctx, o);
-          const previa = previas ? (o && o.numero != null ? previas.find((f) => String(f.numero) === String(o.numero)) : null) || previas[i] : null;
+          let previa = porNumero[i];
+          if (!previa && previas && previas[i] && !usadas.has(previas[i])) { previa = previas[i]; usadas.add(previa); }
+          indices.push(previa ? previas.indexOf(previa) : -1);
           if (previa) (q.subpreguntas || []).forEach((s) => { if (!s.soloLectura && s.tipo !== 'CALCULADA' && previa[s.id] !== undefined) base[s.id] = previa[s.id]; });
           if (previa && Array.isArray(previa[MARCA_MANUAL])) base[MARCA_MANUAL] = previa[MARCA_MANUAL];
           if (previa && previa[ID_FILA]) base[ID_FILA] = previa[ID_FILA];
           return base;
         });
+        if (previas) ordenPrevio[q.id] = indices;
       } else if (!previas) {
         R[q.id] = Array.from({ length: q.minFilas || 0 }).map(() => filaNueva(q, ctx));
       } else {
         // Completa claves faltantes en filas previas (p. ej. subpregunta nueva).
         R[q.id] = previas.map((f) => ({ ...filaNueva(q, ctx), ...f }));
       }
+      R[q.id] = conIdsUnicos(R[q.id]);
       return;
     }
     const vacio = R[q.id] === undefined || R[q.id] === null || R[q.id] === '';
@@ -86,6 +114,20 @@ const armarRespuestasIniciales = (formulario, ctx, existentes) => {
       R[q.id] = v !== undefined && v !== null && v !== '' ? v : valorVacioDe(q);
     }
   }));
+  // Las compuestas con filasDe hacia una con origenFilas (y sus cadenas) se reordenan igual que
+  // ella: cada fila sigue a la suya aunque la lista del contrato haya cambiado. Las que se quedan
+  // sin fila de origen van al final (filas de más: se conservan si tienen datos).
+  const compuestas = [];
+  (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => { if (q.tipo === 'COMPUESTA') compuestas.push(q); }));
+  const reordenar = (idOrigen, indices, vistas) => compuestas.filter((d) => d.filasDe === idOrigen && !d.origenFilas && !vistas.has(d.id) && existentes && Array.isArray(existentes[d.id])).forEach((d) => {
+    const filas = R[d.id];
+    const propios = indices.map((k) => (k < filas.length ? k : -1));
+    const orden = propios.concat(filas.map((_, k) => k).filter((k) => !propios.includes(k)));
+    if (orden.length === filas.length && orden.every((k, j) => k === j)) return;
+    R[d.id] = orden.map((k) => (k >= 0 ? filas[k] : filaNueva(d, ctx)));
+    reordenar(d.id, orden, new Set([...vistas, d.id]));
+  });
+  Object.keys(ordenPrevio).forEach((id) => reordenar(id, ordenPrevio[id], new Set([id])));
   return R;
 };
 
@@ -120,9 +162,16 @@ const validarValor = (q, v) => {
 };
 
 /* ===== 3. Controles por tipo ===== */
-const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo }) => {
+// Estado vivo del motor para los controles: subidas en curso por celda (sobreviven a mover filas
+// o cambiar de capítulo) y las respuestas vigentes (para no avisar desde dentro de un setState).
+const EstadoMotor = createContext(null);
+const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubida }) => {
   const app = useApp();
-  const [subiendo, setSubiendo] = useState(false);
+  const motor = useContext(EstadoMotor);
+  const clave = claveSubida || idCampo;
+  const [subiendoAqui, setSubiendoAqui] = useState(0);
+  const subiendo = (motor ? motor.subidas(clave) : subiendoAqui) > 0;
+  const marcarSubida = (d) => (motor ? motor.marcarSubida(clave, d) : setSubiendoAqui((n) => n + d));
   const [arrastre, setArrastre] = useState(false);
   const lista = Array.isArray(valor) ? valor : [];
   const maxArchivos = q.maxArchivos || 1;
@@ -130,19 +179,21 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo }) => {
   const procesar = async (archivos) => {
     const nuevos = Array.from(archivos || []);
     if (!nuevos.length) return;
+    // Una subida a la vez por campo (también al soltar archivos): no se pasa del máximo.
+    if (subiendo) { app.avisar('info', `Espera a que termine la subida en «${q.etiqueta}»`); return; }
     if (lista.length + nuevos.length > maxArchivos) { app.avisar('alerta', `Máximo ${maxArchivos} ${U.plural(maxArchivos, 'archivo', 'archivos')} en «${q.etiqueta}»`); return; }
     for (const a of nuevos) {
       const ext = U.extension(a.name);
       if (acepta.length && !acepta.includes(ext)) { app.avisar('alerta', `«${a.name}»: extensión no permitida (${acepta.join(', ')})`); continue; }
       if (q.maxMB && a.size > q.maxMB * 1048576) { app.avisar('alerta', `«${a.name}» supera ${q.maxMB} MB`); continue; }
-      setSubiendo(true);
+      marcarSubida(1);
       try {
         const r = await subir(a, q);
         const nuevo = { nombre: r.nombre || a.name, url: r.url || '', id: r.id || '', tamano: a.size };
-        onCambio((vigente) => [...(Array.isArray(vigente) ? vigente : []), nuevo]);
+        onCambio((vigente) => [...(Array.isArray(vigente) ? vigente : []), nuevo], { archivo: a.name });
         if (r.simulado) app.avisar('info', 'Archivo simulado (modo demostración): no se subió a SharePoint');
       } catch (e) { app.avisar(e.code === 'flujo-sin-url' ? 'alerta' : 'error', `No se pudo subir «${a.name}»: ${e.message}`); }
-      finally { setSubiendo(false); }
+      finally { marcarSubida(-1); }
     }
   };
   return (
@@ -154,7 +205,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo }) => {
               <Icono nombre="archivo" className="texto-3" />
               <span className="flex-1 min-w-0 truncate">{a.url ? <a href={a.url} target="_blank" rel="noopener noreferrer">{a.nombre}</a> : a.nombre}</span>
               <span className="mono text-xs texto-3">{U.tamanoLegible(a.tamano)}</span>
-              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => onCambio(lista.filter((_, j) => j !== i))}><Icono nombre="x" tam={14} /></button> : null}
+              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => onCambio((vigente) => { const l = Array.isArray(vigente) ? vigente : []; const k = l.indexOf(a); return l.filter((_, j) => j !== (k >= 0 ? k : i)); })}><Icono nombre="x" tam={14} /></button> : null}
             </li>
           ))}
         </ul>
@@ -191,7 +242,7 @@ const SeleccionMultiple = ({ q, valor, onCambio, editable, invalido, catalogos }
     </div>
   );
 };
-const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, valorCalculado, alerta, catalogos, subir }) => {
+const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, valorCalculado, alerta, catalogos, subir, claveSubida }) => {
   const comun = { id: idCampo, invalido, disabled: !editable, 'aria-invalid': invalido || undefined };
   switch (q.tipo) {
     case 'TEXTO': return <Entrada {...comun} type="text" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} maxLength={q.max || undefined} onChange={(e) => onCambio(e.target.value)} />;
@@ -211,7 +262,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
       const otro = valor !== '' && valor != null && !esPaso;
       return (
         <div className="flex flex-wrap items-center gap-2">
-          <Segmentado etiqueta={q.etiqueta} valor={esPaso ? valor : (otro ? '__otro' : '')} opciones={[...pasos.map((p) => ({ valor: p, etiqueta: `${p} %` })), { valor: '__otro', etiqueta: 'Otro' }]} onCambio={(v) => onCambio(v === '__otro' ? (esPaso || valor === '' ? 10 : valor) : v)} />
+          <Segmentado id={otro ? undefined : idCampo} etiqueta={q.etiqueta} valor={esPaso ? valor : (otro ? '__otro' : '')} opciones={[...pasos.map((p) => ({ valor: p, etiqueta: `${p} %` })), { valor: '__otro', etiqueta: 'Otro' }]} onCambio={(v) => onCambio(v === '__otro' ? (esPaso || valor === '' ? 10 : valor) : v)} />
           {otro ? <div className="relative w-28"><Entrada {...comun} type="number" inputMode="decimal" className="mono campo-sufijo" value={valor} min={0} max={100} onChange={(e) => onCambio(e.target.value === '' ? '' : Number(e.target.value))} aria-label={`${q.etiqueta} (otro valor)`} /><span className="absolute right-3 top-1/2 -translate-y-1/2 texto-3 text-sm">%</span></div> : null}
         </div>
       );
@@ -224,7 +275,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
     }
     case 'SELECCION_MULTIPLE': return <SeleccionMultiple q={q} valor={valor} onCambio={onCambio} editable={editable} invalido={invalido} catalogos={catalogos} />;
     case 'SI_NO': return editable
-      ? <Segmentado etiqueta={q.etiqueta} valor={valor} opciones={[{ valor: 'SI', etiqueta: 'Sí' }, { valor: 'NO', etiqueta: 'No' }]} onCambio={onCambio} />
+      ? <Segmentado id={idCampo} etiqueta={q.etiqueta} valor={valor} opciones={[{ valor: 'SI', etiqueta: 'Sí' }, { valor: 'NO', etiqueta: 'No' }]} onCambio={onCambio} />
       : <Entrada {...comun} value={valor === 'SI' ? 'Sí' : valor === 'NO' ? 'No' : ''} readOnly />;
     case 'CALCULADA': return (
       <div>
@@ -232,7 +283,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
         {alerta && q.mensajeAlerta ? <div className="error-campo"><Icono nombre="alerta" tam={14} />{q.mensajeAlerta}</div> : null}
       </div>
     );
-    case 'ARCHIVO': return <CampoArchivo q={q} valor={valor} onCambio={onCambio} editable={editable} subir={subir} idCampo={idCampo} />;
+    case 'ARCHIVO': return <CampoArchivo q={q} valor={valor} onCambio={onCambio} editable={editable} subir={subir} idCampo={idCampo} claveSubida={claveSubida} />;
     case 'URL': return <Entrada {...comun} type="url" inputMode="url" className="mono" value={valor == null ? '' : valor} placeholder={q.placeholder || 'https://'} onChange={(e) => onCambio(e.target.value.trim())} />;
     case 'TELEFONO': return <Entrada {...comun} type="tel" inputMode="tel" className="mono" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} onChange={(e) => onCambio(e.target.value)} />;
     case 'CORREO': return <Entrada {...comun} type="email" inputMode="email" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} onChange={(e) => onCambio(e.target.value.trim())} />;
@@ -241,33 +292,77 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
 };
 
 /* ===== 4. Compuesta ===== */
+// Activado con el dedo: no se mueve el foco a un campo (en el teléfono abriría el teclado).
+const porToque = (e) => !!(e && e.nativeEvent && e.nativeEvent.pointerType === 'touch');
 const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogos, subir, ctx, traer }) => {
   const app = useApp();
+  const motor = useContext(EstadoMotor);
   const movil = useMedia('(max-width: 767px)');
+  // Tras quitar una fila, el foco (que el diálogo devolvió al botón de esa fila, ya desmontado) pasa
+  // a la fila que quedó en su lugar o a «Agregar fila».
+  const focoTrasQuitar = useRef(null);
+  useEffect(() => {
+    const p = focoTrasQuitar.current;
+    if (!p || filas.some(esLaFila(p.fila))) return;
+    focoTrasQuitar.current = null;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const k = Math.min(p.i, filas.length - 1);
+    const primeraCelda = () => { try { return document.querySelector(`[id^="${CSS.escape(`${idBase}-${q.id}-${k}-`)}"]`); } catch (e) { return null; } };
+    const el = (k >= 0 && (document.getElementById(`${idFila(filas[k], k)}-quitar`) || primeraCelda())) || document.getElementById(`${idBase}-${q.id}-agregar`);
+    if (el && el.focus) el.focus();
+  });
   const subs = (q.subpreguntas || []);
   const hayTextoLargo = subs.some((s) => s.tipo === 'TEXTO_LARGO' || s.tipo === 'ARCHIVO');
   const comoTabla = !movil && !hayTextoLargo && subs.length <= 9;
   const puedeAgregar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && !q.filasDe && (!q.maxFilas || filas.length < q.maxFilas);
   const puedeQuitar = editable && q.permiteAgregarFilas !== false && !q.origenFilas && !q.filasDe && filas.length > (q.minFilas || 0);
+  // Las filas que siguen a otra (filasDe) o a la lista del contrato (origenFilas) van en su orden.
+  const ordenable = !!q.ordenable && editable && !q.filasDe && !q.origenFilas;
+  // Las filas de más de una compuesta con filasDe (ya sin fila de origen) se pueden quitar a mano.
+  const largoOrigen = q.filasDe && motor ? (Array.isArray(motor.leer(q.filasDe)) ? motor.leer(q.filasDe).length : 0) : Infinity;
+  const quitable = (i) => puedeQuitar || (editable && !!q.filasDe && i >= largoOrigen);
+  const hayQuitables = filas.some((_, i) => quitable(i));
   const obtenerFila = (i) => (n) => (n.startsWith('fila.') ? ev.valorFila(q.id, i, n.slice(5)) : ev.valor(n));
   const visibleSub = (s, i) => (s.condicion ? Formulas.evaluarCondicion(s.condicion, obtenerFila(i)) : true);
   // Se aplican sobre las filas vigentes (no las de este render): una subida de archivo termina
   // después y no debe deshacer lo que cambió mientras tanto.
   const vigentes = (fs) => (Array.isArray(fs) ? fs : []);
-  // La fila se busca por su id (o por identidad si no lo tiene); si ya no existe no se escribe en otra.
+  // La fila se busca por su id (o por identidad si no lo tiene) en las respuestas vigentes; si ya
+  // no existe, se avisa (fuera del setState) y no se escribe en otra.
   const esLaFila = (fila) => (f) => (fila && fila[ID_FILA] ? f && f[ID_FILA] === fila[ID_FILA] : f === fila);
-  const cambiarFila = (i, cambio) => {
+  const cambiarFila = (i, cambio, info) => {
     const fila = filas[i];
-    onCambio((fs) => {
-      const actuales = vigentes(fs);
-      if (!actuales.some(esLaFila(fila))) { app.avisar('alerta', `La fila ${i + 1} de «${q.etiqueta}» ya no existe: el cambio no se aplicó`); return actuales; }
-      return actuales.map((f) => (esLaFila(fila)(f) ? cambio(f) : f));
-    });
+    if (!vigentes(motor ? motor.leer(q.id) : filas).some(esLaFila(fila))) {
+      app.avisar('alerta', info && info.archivo ? `No se adjuntó «${info.archivo}»: su fila de «${q.etiqueta}» se quitó mientras subía` : `El cambio no se aplicó: esa fila de «${q.etiqueta}» ya no existe`);
+      return;
+    }
+    onCambio((fs) => vigentes(fs).map((f) => (esLaFila(fila)(f) ? cambio(f) : f)));
   };
-  const cambiarCelda = (i, subId, v) => cambiarFila(i, (f) => ({ ...f, [subId]: typeof v === 'function' ? v(f[subId]) : v }));
+  const cambiarCelda = (i, subId, v, info) => cambiarFila(i, (f) => ({ ...f, [subId]: typeof v === 'function' ? v(f[subId]) : v }), info);
+  const idFila = (f, i) => `${idBase}-${q.id}-${(f && f[ID_FILA]) || i}`;
+  // Foco al control de la celda (en un grupo Sí/No, a la opción elegida) sin abrir listas.
+  const enfocar = (id) => requestAnimationFrame(() => {
+    const el = document.getElementById(id);
+    const destino = el && el.getAttribute('role') === 'group' ? (el.querySelector('[aria-pressed="true"]') || el.querySelector('button')) : el;
+    if (!destino || !destino.focus) return;
+    destino.dataset.sinAbrir = '1';
+    destino.focus();
+    delete destino.dataset.sinAbrir;
+  });
   const agregar = () => onCambio((fs) => [...vigentes(fs), filaNueva(q, ctx)]);
-  const quitar = async (i) => { const fila = filas[i]; if (await app.confirmar({ titulo: 'Quitar fila', mensaje: `¿Quitar la fila ${i + 1}?`, textoOk: 'Quitar', peligro: true })) onCambio((fs) => vigentes(fs).filter((f) => !esLaFila(fila)(f))); };
-  const mover = (i, d) => { const fila = filas[i]; onCambio((fs) => { const copia = [...vigentes(fs)]; const a = copia.findIndex(esLaFila(fila)); const b = a + d; if (a < 0 || b < 0 || b >= copia.length) return copia; [copia[a], copia[b]] = [copia[b], copia[a]]; return copia; }); };
+  const quitar = async (i, toque) => {
+    const fila = filas[i];
+    const deMas = !puedeQuitar && !!q.filasDe;
+    if (!(await app.confirmar({ titulo: 'Quitar fila', mensaje: deMas ? `¿Quitar la fila ${i + 1}? Ya no tiene fila de origen.` : `¿Quitar la fila ${i + 1}?`, textoOk: 'Quitar', peligro: true }))) return;
+    focoTrasQuitar.current = toque ? null : { fila, i };
+    onCambio((fs) => vigentes(fs).filter((f) => !esLaFila(fila)(f)));
+  };
+  const mover = (i, d) => {
+    const fila = filas[i];
+    onCambio((fs) => { const copia = [...vigentes(fs)]; const a = copia.findIndex(esLaFila(fila)); const b = a + d; if (a < 0 || b < 0 || b >= copia.length) return copia; [copia[a], copia[b]] = [copia[b], copia[a]]; return copia; });
+    // En el borde el botón pulsado se desactiva y el foco se perdería: pasa al botón contrario.
+    requestAnimationFrame(() => { if (document.activeElement && document.activeElement !== document.body) return; const el = document.getElementById(`${idFila(fila, i)}-${d < 0 ? 'bajar' : 'subir'}`); if (el) el.focus(); });
+  };
   // «Usar …» solo tiene sentido si la fila tiene equivalente en su origen.
   const tieneOrigen = (s, i) => { const [comp, campo] = String(s.precargarDe).split('.'); return campo === undefined || i < ev.lista(comp, campo).length; };
   const celdaEditable = (s) => editable && !s.soloLectura && s.tipo !== 'CALCULADA';
@@ -277,32 +372,32 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
     if (!visibleSub(s, i)) return null;
     return (
       <Campo key={s.id} etiqueta={compacto ? null : s.etiqueta} obligatoria={!compacto && s.obligatoria} id={idCampo} error={err} ayuda={compacto ? null : s.ayuda}>
-        <ControlPregunta q={s} valor={filas[i][s.id]} onCambio={(v) => cambiarCelda(i, s.id, v)} editable={celdaEditable(s)} idCampo={idCampo} invalido={!!err}
-          ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} />
+        <ControlPregunta q={s} valor={filas[i][s.id]} onCambio={(v, info) => cambiarCelda(i, s.id, v, info)} editable={celdaEditable(s)} idCampo={idCampo} invalido={!!err}
+          ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} claveSubida={`${q.id}.${filas[i][ID_FILA] || i}.${s.id}`} />
         {traer && s.precargar === 'ultimoEnvio' && celdaEditable(s) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => traer(q.id, i, s.id)}>Traer del mes anterior</button> : null}
-        {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) && tieneOrigen(s, i) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={() => cambiarFila(i, (f) => conManuales(f, manualesDe(f).filter((x) => x !== s.id)))}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
+        {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) && tieneOrigen(s, i) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={(e) => { cambiarFila(i, (f) => conManuales(f, manualesDe(f).filter((x) => x !== s.id))); if (!porToque(e)) enfocar(idCampo); }}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
       </Campo>
     );
   };
-  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : q.filasDe ? 'Sin filas: aparecen solas con las filas de arriba.' : 'Sin filas.'}</span>{puedeAgregar ? <Boton tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
+  if (!filas.length) return <div className="panel-suave p-4 text-sm texto-2 flex items-center justify-between gap-2 flex-wrap"><span>{q.origenFilas ? 'No hay filas de origen (revisa la información del contrato).' : q.filasDe ? 'Sin filas: aparecen solas con las filas de arriba.' : 'Sin filas.'}</span>{puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" onClick={agregar}>Agregar fila</Boton> : null}</div>;
   if (comoTabla) {
     return (
       <div>
         <div className="tabla-envoltura">
           <table className="tabla">
-            <thead><tr><th style={{ width: 36 }}>#</th>{subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <th key={s.id}>{s.etiqueta}{s.obligatoria ? <span className="req">*</span> : null}</th>)}{(puedeQuitar || q.ordenable) ? <th /> : null}</tr></thead>
+            <thead><tr><th style={{ width: 36 }}>#</th>{subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <th key={s.id}>{s.etiqueta}{s.obligatoria ? <span className="req">*</span> : null}</th>)}{(hayQuitables || ordenable) ? <th /> : null}</tr></thead>
             <tbody>
               {filas.map((f, i) => (
-                <tr key={i}>
+                <tr key={f[ID_FILA] || i}>
                   <td className="mono texto-3">{i + 1}</td>
                   {subs.filter((s) => s.tipo !== 'SEPARADOR').map((s) => <td key={s.id} style={{ minWidth: 130, verticalAlign: 'top' }}>{render(s, i, true)}</td>)}
-                  {(puedeQuitar || q.ordenable) ? <td className="text-right whitespace-nowrap">{q.ordenable && editable ? <><Boton variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" onClick={() => mover(i, -1)} /><Boton variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" onClick={() => mover(i, 1)} /></> : null}{puedeQuitar ? <Boton variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={() => quitar(i)} /> : null}</td> : null}
+                  {(hayQuitables || ordenable) ? <td className="text-right whitespace-nowrap">{ordenable ? <><Boton id={`${idFila(f, i)}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={i === 0} onClick={() => mover(i, -1)} /><Boton id={`${idFila(f, i)}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={i === filas.length - 1} onClick={() => mover(i, 1)} /></> : null}{quitable(i) ? <Boton id={`${idFila(f, i)}-quitar`} variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={(e) => quitar(i, porToque(e))} /> : null}</td> : null}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {puedeAgregar ? <Boton tam="sm" icono="mas" className="mt-2" onClick={agregar}>Agregar fila</Boton> : null}
+        {puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" className="mt-2" onClick={agregar}>Agregar fila</Boton> : null}
       </div>
     );
   }
@@ -311,12 +406,12 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
   const cuerpo = subs.filter((s) => !(s.soloLectura && s.tipo !== 'CALCULADA') && s.tipo !== 'SEPARADOR');
   return (
     <div className="grid gap-3">
-      {filas.map((f, i) => <TarjetaFila key={i} indice={i} fila={f} cabecera={cabecera} cuerpo={cuerpo} render={render} q={q} puedeQuitar={puedeQuitar} quitar={quitar} ordenable={q.ordenable && editable} mover={mover} total={filas.length} tieneError={Object.keys(errores).some((k) => k.startsWith(`${q.id}.${i}.`))} />)}
-      {puedeAgregar ? <Boton tam="sm" icono="mas" className="justify-self-start" onClick={agregar}>Agregar fila</Boton> : null}
+      {filas.map((f, i) => <TarjetaFila key={f[ID_FILA] || i} indice={i} idFila={idFila(f, i)} fila={f} cabecera={cabecera} cuerpo={cuerpo} render={render} q={q} puedeQuitar={quitable(i)} quitar={quitar} ordenable={ordenable} mover={mover} total={filas.length} tieneError={Object.keys(errores).some((k) => k.startsWith(`${q.id}.${i}.`))} />)}
+      {puedeAgregar ? <Boton id={`${idBase}-${q.id}-agregar`} tam="sm" icono="mas" className="justify-self-start" onClick={agregar}>Agregar fila</Boton> : null}
     </div>
   );
 };
-const TarjetaFila = ({ indice, fila, cabecera, cuerpo, render, q, puedeQuitar, quitar, ordenable, mover, total, tieneError }) => {
+const TarjetaFila = ({ indice, idFila, fila, cabecera, cuerpo, render, q, puedeQuitar, quitar, ordenable, mover, total, tieneError }) => {
   const [abierta, setAbierta] = useState(false);
   const numero = cabecera.find((s) => s.tipo === 'NUMERO');
   const textos = cabecera.filter((s) => s.tipo !== 'NUMERO');
@@ -334,7 +429,7 @@ const TarjetaFila = ({ indice, fila, cabecera, cuerpo, render, q, puedeQuitar, q
           })}
           {textos.some((s) => String(fila[s.id] || '').length > 160) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => setAbierta(!abierta)}>{abierta ? 'Ver menos' : 'Ver completa'}</button> : null}
         </div>
-        {(puedeQuitar || ordenable) ? <div className="flex gap-1">{ordenable ? <><Boton variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={indice === 0} onClick={() => mover(indice, -1)} /><Boton variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={indice === total - 1} onClick={() => mover(indice, 1)} /></> : null}{puedeQuitar ? <Boton variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={() => quitar(indice)} /> : null}</div> : null}
+        {(puedeQuitar || ordenable) ? <div className="flex gap-1">{ordenable ? <><Boton id={`${idFila}-subir`} variante="fantasma" tam="xs" soloIcono icono="arriba" titulo="Subir" disabled={indice === 0} onClick={() => mover(indice, -1)} /><Boton id={`${idFila}-bajar`} variante="fantasma" tam="xs" soloIcono icono="abajo" titulo="Bajar" disabled={indice === total - 1} onClick={() => mover(indice, 1)} /></> : null}{puedeQuitar ? <Boton id={`${idFila}-quitar`} variante="fantasma" tam="xs" soloIcono icono="basura" titulo="Quitar fila" onClick={(e) => quitar(indice, porToque(e))} /> : null}</div> : null}
       </div>
       <div className="tarjeta-cuerpo grid gap-3 md:grid-cols-2">
         {cuerpo.map((s) => <div key={s.id} className={s.tipo === 'TEXTO_LARGO' || s.tipo === 'ARCHIVO' ? 'md:col-span-2' : ''}>{render(s, indice, false)}</div>)}
@@ -353,7 +448,7 @@ const Pregunta = ({ q, valor, onCambio, editable, error, ev, catalogos, subir, c
       <Campo etiqueta={q.etiqueta} obligatoria={q.obligatoria && editable} id={idCampo} error={error} ayuda={q.ayuda}>
         {q.tipo === 'COMPUESTA'
           ? <Compuesta q={q} filas={Array.isArray(valor) ? valor : []} onCambio={onCambio} editable={editable} ev={ev} errores={errores} idBase={idBase} catalogos={catalogos} subir={subir} ctx={ctx} traer={traer} />
-          : <ControlPregunta q={q} valor={valor} onCambio={onCambio} editable={editable} idCampo={idCampo} invalido={!!error} ev={ev} valorCalculado={q.tipo === 'CALCULADA' ? ev.valor(q.id) : undefined} alerta={q.alertaSi ? ev.alerta(q.id) : false} catalogos={catalogos} subir={subir} />}
+          : <ControlPregunta q={q} valor={valor} onCambio={onCambio} editable={editable} idCampo={idCampo} invalido={!!error} ev={ev} valorCalculado={q.tipo === 'CALCULADA' ? ev.valor(q.id) : undefined} alerta={q.alertaSi ? ev.alerta(q.id) : false} catalogos={catalogos} subir={subir} claveSubida={q.id} />}
         {etiquetaSoloLectura && q.soloRevisor ? <div className="ayuda flex items-center gap-1"><Icono nombre="candado" tam={12} /> Lo diligencia el revisor</div> : null}
         {traer && q.precargar === 'ultimoEnvio' && editable && q.tipo !== 'COMPUESTA' ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => traer(q.id)}>Traer del mes anterior</button> : null}
         {prorratear && q.prorrateo && editable ? <Boton tam="xs" icono="calendario" className="mt-2" onClick={() => prorratear(q)}>Prorratear por días del período</Boton> : null}
@@ -409,30 +504,42 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
   const filasDe = (R, id) => (Array.isArray(R[id]) ? R[id] : []);
   const evaluar = (R) => Formulas.crearEvaluador({ formulario, respuestas: R, parametros: ctx.parametros });
   const enlazadasDe = (q) => (q.subpreguntas || []).filter(esEnlazada);
-  const tieneDatos = (q, f) => !!f && (q.subpreguntas || []).some((s) => s.tipo !== 'CALCULADA' && !esEnlazada(s) && !estaVacio(f[s.id]));
+  // De solo lectura (la subpregunta o toda la compuesta): sin marcas, siguen siempre a su origen.
+  const fija = (q, s) => !!(s.soloLectura || q.soloLectura);
+  // Datos propios de una fila: lo no enlazado y lo enlazado escrito a mano (o guardado con una
+  // plantilla sin enlaces, cuando la fila aún no tiene marcas); lo de solo lectura es copia.
+  const tieneDatos = (q, f) => !!f && (q.subpreguntas || []).some((s) => s.tipo !== 'CALCULADA' && !estaVacio(f[s.id])
+    && (!esEnlazada(s) || (!fija(q, s) && (!Array.isArray(f[MARCA_MANUAL]) || manualesDe(f).includes(s.id)))));
   let R = despues;
 
   // 1) Filas que siguen a otra compuesta. Al quitar o mover filas del origen, cada fila conserva
   //    la suya (se empareja por identidad); al editar una celda, por posición. Las filas de más
   //    con datos (envíos de versiones anteriores) no se descartan nunca: se usan para las
-  //    filas nuevas del origen o quedan al final.
+  //    filas nuevas del origen o quedan al final. Si una fila de más se descarta por quedar vacía,
+  //    las filas con datos que la seguían (cadenas A → B → C) pasan también al final.
+  const vaciadas = new Set();
   enlazadas.filter((q) => q.filasDe).forEach((q) => {
     const origenAntes = filasDe(antes, q.filasDe), origen = filasDe(R, q.filasDe), propias = filasDe(R, q.id);
+    // (por id: la fila que se acaba de vaciar es otro objeto que la de «antes»)
+    const conDatos = (filas) => filas.filter((f) => { if (tieneDatos(q, f)) return true; vaciadas.add(f); if (f && f[ID_FILA]) vaciadas.add(f[ID_FILA]); return false; });
+    const vaciada = (f) => !!f && (vaciadas.has(f) || (!!f[ID_FILA] && vaciadas.has(f[ID_FILA])));
     let nuevas;
     if (!inicial && origenAntes !== origen) {
       const mismaLongitud = origenAntes.length === origen.length;
       const extras = propias.slice(origenAntes.length);
       const indiceAntes = (o) => { const k = origenAntes.indexOf(o); return k >= 0 || !o || !o[ID_FILA] ? k : origenAntes.findIndex((x) => x && x[ID_FILA] === o[ID_FILA]); };
-      nuevas = origen.map((o, k) => {
-        const previa = indiceAntes(o);
-        if (previa >= 0 && propias[previa]) return propias[previa];
-        if (mismaLongitud && propias[k]) return propias[k];
-        return null;
-      }).map((f) => f || extras.shift() || filaNueva(q, ctx)).concat(extras.filter((f) => tieneDatos(q, f)));
+      // Primero por identidad; luego por posición (celda editada) o con una fila de más. Ninguna
+      // fila se usa dos veces.
+      const usadas = new Set();
+      const tomar = (f) => { if (!f || usadas.has(f)) return null; usadas.add(f); return f; };
+      nuevas = origen.map((o) => { const k = indiceAntes(o); return k >= 0 ? tomar(propias[k]) : null; })
+        .map((f, k) => f || (mismaLongitud && tomar(propias[k])) || tomar(extras.find((x) => !usadas.has(x))) || filaNueva(q, ctx));
+      const huerfanas = propias.slice(0, origenAntes.length).filter((f, k) => !usadas.has(f) && vaciada(origenAntes[k]) && tieneDatos(q, f));
+      nuevas = nuevas.concat(conDatos(extras.filter((f) => !usadas.has(f))), huerfanas);
     } else if (propias.length < origen.length) {
       nuevas = [...propias, ...Array.from({ length: origen.length - propias.length }, () => filaNueva(q, ctx))];
     } else if (propias.length > origen.length) {
-      nuevas = propias.slice(0, origen.length).concat(propias.slice(origen.length).filter((f) => tieneDatos(q, f)));
+      nuevas = propias.slice(0, origen.length).concat(conDatos(propias.slice(origen.length)));
     } else return;
     if (nuevas.length !== propias.length || nuevas.some((f, k) => f !== propias[k])) R = { ...R, [q.id]: nuevas };
   });
@@ -443,7 +550,7 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
   //    las vació o si difieren de su origen; vuelven a seguirlo si escribió el mismo valor.
   const evActual = evaluar(R);
   enlazadas.forEach((q) => {
-    const subs = enlazadasDe(q).filter((s) => !s.soloLectura);
+    const subs = enlazadasDe(q).filter((s) => !fija(q, s));
     if (!subs.length) return;
     const filasAntes = filasDe(antes, q.id), editadas = filasDe(despues, q.id);
     const editadaAqui = !inicial && editada === q.id && filasAntes.length === editadas.length;
@@ -453,7 +560,9 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
       const sinOrigen = (s) => { const [comp, campo] = String(s.precargarDe).split('.'); return campo !== undefined && i >= filasDe(R, comp).length; };
       const distinto = (s) => { const v = valorEnlace(f[s.id], s); return v !== null && (sinOrigen(s) || v !== valorEnlace(origenEnlace(evActual, s.precargarDe, i), s)); };
       let marcas;
-      if (inicial) marcas = manualesDe(f).concat(subs.filter(distinto).map((s) => s.id));
+      // Al abrir, sin fila de origen solo se infiere en filas sin marcas (datos de una plantilla sin
+      // enlaces); en las demás, lo no marcado era copia del origen, no un dato propio.
+      if (inicial) marcas = manualesDe(f).concat(subs.filter((s) => distinto(s) && !(sinOrigen(s) && Array.isArray(f[MARCA_MANUAL]))).map((s) => s.id));
       else if (!Array.isArray(f[MARCA_MANUAL])) marcas = [];
       else if (editadaAqui && editadas[i] === f && !filasAntes.includes(f)) {
         const previa = filasAntes[i] || {};
@@ -482,7 +591,7 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
       const nuevas = filasDe(R, q.id).map((f, i) => {
         let fila = f;
         subs.forEach((s) => {
-          if (!s.soloLectura && manualesDe(f).includes(s.id)) return;
+          if (!fija(q, s) && manualesDe(f).includes(s.id)) return;
           const [comp, campo] = String(s.precargarDe).split('.');
           if (campo !== undefined && i >= filasDe(R, comp).length) return;   // fila sin equivalente en el origen
           const nuevo = valorEnlace(origenEnlace(ev, s.precargarDe, i), s);
@@ -519,6 +628,15 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     return soloLectura ? R : sincronizarEnlaces(formulario, ctx, R, R, { inicial: true });
   });
   const [capituloId, setCapituloId] = useState(capituloInicial || (capitulos[0] && capitulos[0].id));
+  // Subidas en curso por celda y respuestas vigentes, para los controles (EstadoMotor).
+  const respuestasRef = useRef(respuestas);
+  respuestasRef.current = respuestas;
+  const [subidas, setSubidas] = useState({});
+  const estadoMotor = useMemo(() => ({
+    subidas: (clave) => subidas[clave] || 0,
+    marcarSubida: (clave, d) => setSubidas((m) => { const n = (m[clave] || 0) + d; const c = { ...m }; if (n > 0) c[clave] = n; else delete c[clave]; return c; }),
+    leer: (id) => respuestasRef.current[id],
+  }), [subidas]);
   const [intentoEnvio, setIntentoEnvio] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const ev = useMemo(() => Formulas.crearEvaluador({ formulario, respuestas, parametros: ctx.parametros }), [formulario, respuestas, ctx.parametros]);
@@ -542,11 +660,13 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   }, [respuestas]); // eslint-disable-line
 
   // Si la plantilla cambia con el formulario abierto («Actualizar datos»), se infieren las marcas
-  // sobre lo que ya hay, como al abrir.
+  // sobre lo que ya hay, como al abrir. Solo si cambió de verdad: recargar crea objetos nuevos
+  // aunque la plantilla sea la misma (y un cambio de parámetros no debe congelar lo precargado).
   const formularioPrevio = useRef(formulario);
   useEffect(() => {
-    if (formularioPrevio.current === formulario) return;
+    const previo = formularioPrevio.current;
     formularioPrevio.current = formulario;
+    if (previo === formulario || U.igualProfundo(previo.capitulos || [], formulario.capitulos || [])) return;
     if (!soloLectura) setRespuestas((r) => sincronizarEnlaces(formulario, ctx, r, r, { inicial: true }));
   }, [formulario]); // eslint-disable-line
   // v puede ser una función del valor vigente (las compuestas la usan para no pisar cambios recientes).
@@ -634,6 +754,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     setTimeout(() => { const el = document.getElementById(`preg-${preguntaId}`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); const campo = el.querySelector('input, textarea, select, button'); if (campo && campo.focus) campo.focus({ preventScroll: true }); } }, 60);
   };
   const enviar = async () => {
+    if (Object.keys(subidas).length) { app.avisar('alerta', 'Espera a que terminen de subir los archivos'); return; }
     setIntentoEnvio(true);
     if (Object.keys(errores).length) { app.avisar('alerta', `Hay ${Object.keys(errores).length} ${U.plural(Object.keys(errores).length, 'campo por corregir', 'campos por corregir')}`); irAPrimerError(); return; }
     setEnviando(true);
@@ -673,6 +794,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   };
   void reloj;
   return (
+    <EstadoMotor.Provider value={estadoMotor}>
     <div className="grid gap-4 lg:grid-cols-[240px_1fr] items-start">
       <nav className="riel" aria-label="Capítulos">
         {visiblesCap.map((c, i) => {
@@ -713,5 +835,6 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         ) : null}
       </div>
     </div>
+    </EstadoMotor.Provider>
   );
 };
