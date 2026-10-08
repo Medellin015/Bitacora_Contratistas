@@ -522,6 +522,7 @@ const PaginaFormulario = () => {
   const [estadoGuardado, setEstadoGuardado] = useState({ fecha: null, guardando: false, error: null });
   const [decisionBorrador, setDecisionBorrador] = useState(null); // null | 'continuar' | 'nuevo'
   const ultimoGuardado = useRef(null);
+  const respuestasActuales = useRef(null);   // lo que hay en pantalla (MotorFormulario.onCambioRespuestas)
   const { datos, cargando, error } = useCarga(async () => {
     if (!formulario || !contrato) return null;
     const uid = app.usuario.id;
@@ -598,7 +599,12 @@ const PaginaFormulario = () => {
     catch (e) { setEstadoGuardado({ fecha: null, guardando: false, error: 'no se guardó en el servidor (queda copia local)' }); }
   };
   const subir = async (archivo, pregunta) => {
-    if (ultimoGuardado.current) await DB.guardarBorrador(idBorrador, ultimoGuardado.current).catch(() => {});
+    // El flujo lee el borrador (dueño, contrato, formulario y período) para ubicar el archivo: se
+    // guarda antes de subir con lo que hay en pantalla, aunque todavía no se haya autoguardado.
+    const doc = !esCorreccion && respuestasActuales.current
+      ? { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas: respuestasActuales.current, capituloActual: (ultimoGuardado.current && ultimoGuardado.current.capituloActual) || null }
+      : ultimoGuardado.current;
+    if (doc) { ultimoGuardado.current = doc; await DB.guardarBorrador(idBorrador, doc).catch(() => {}); }
     return Flujos.subirArchivo({ origen: esCorreccion ? 'envio' : 'borrador', docId: esCorreccion ? envio.id : idBorrador, preguntaId: pregunta.id, archivo, maxMB: pregunta.maxMB || 15 });
   };
   const armarDocumentos = async (respuestas, voBoTexto) => {
@@ -668,7 +674,7 @@ const PaginaFormulario = () => {
       <MotorFormulario key={`${formulario.id}-${decisionBorrador}`} formulario={formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
         subir={subir} onGuardar={esLectura ? null : guardarBorrador} estadoGuardado={estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : undefined}
-        acciones={<Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>} />
+        acciones={<Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>} onCambioRespuestas={(r) => { respuestasActuales.current = r; }} />
       {previa ? <VistaPreviaDocx titulo={`Vista previa · ${formulario.nombre}`} generar={previa.generar} onCerrar={() => setPrevia(null)} /> : null}
     </div>
   );
