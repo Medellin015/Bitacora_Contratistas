@@ -32,8 +32,11 @@ avisa y sigue funcionando.
   pero el flujo debe responder antes de los 120 s. Por eso: sin reintentos en
   las acciones, y la respuesta en cuanto exista el enlace.
 - El disparador «Cuando se recibe una solicitud HTTP» y la acción «HTTP» son
-  **Premium**. El dueño del flujo necesita Power Automate Premium, la prueba, o
-  una licencia por flujo.
+  **Premium**. El dueño del flujo necesita Power Automate Premium o una licencia
+  Process (por flujo). La prueba sirve para construirlo y probarlo, no para el
+  uso diario: corre con el perfil de rendimiento «Bajo» (120 MB de contenido
+  cada 5 minutos) y cada archivo de 15 MB mueve más de 20 MB, así que varias
+  subidas grandes seguidas se frenan y pueden pasar de los 120 s.
 
 ## subirArchivo
 
@@ -47,7 +50,7 @@ La app envía, por cada archivo:
 | `origen` | `borrador` (formulario en curso) o `envio` (corrección de un envío). |
 | `docId` | Id del documento en `borradores` o `envios`. La app guarda el borrador **antes** de subir. |
 | `preguntaId` | Id de la pregunta del formulario (por ejemplo `soporte` o `evidenciaArchivo`). |
-| `nombre` | Nombre del archivo, ya sin `\ / : * ? " < > \|`. |
+| `nombre` | Nombre del archivo, ya sin `\ / : * ? " < > \|`. El flujo cambia `#` y `%` por `-`. |
 | `tipo` | Tipo MIME. |
 | `base64` | El archivo en base64, sin `data:…,`. Máximo 15 MB (unos 20 MB en base64). |
 
@@ -68,9 +71,12 @@ un archivo. En la app se sigue viendo el nombre original.
 
 1. **Cuenta**: crea el flujo con la cuenta **dueña de la carpeta** de OneDrive.
    El conector OneDrive para la Empresa solo escribe en el OneDrive de la
-   cuenta de la conexión, aunque otra persona tenga la carpeta compartida. Si el
-   flujo debe sobrevivir a esa cuenta, usa una cuenta institucional o agrega
-   copropietarios.
+   cuenta de la conexión, aunque otra persona tenga la carpeta compartida. Los
+   archivos y sus enlaces viven en el OneDrive de esa cuenta: si la cuenta se
+   elimina o pierde la licencia (por ejemplo, al terminar un contrato), los
+   enlaces guardados en la app dejan de abrir y el flujo deja de funcionar.
+   Agregar copropietarios al flujo no lo evita. Lo ideal es una cuenta
+   institucional con licencia que no dependa de una persona.
 2. **Ruta de la carpeta raíz**: abre la carpeta en el navegador con esa cuenta.
    Arriba se ve la ruta, por ejemplo «Mis archivos > Bitácora > Soportes». Para
    el flujo esa carpeta es `/Bitácora/Soportes`: sin «Mis archivos» y sin
@@ -84,7 +90,7 @@ un archivo. En la app se sigue viendo el nombre original.
 
 Copilot de Power Automate entiende mejor el inglés y no arma bien las
 expresiones largas. Úsalo para el esqueleto y luego pega los valores de la
-tabla siguiente.
+sección siguiente.
 
 En [make.powerautomate.com](https://make.powerautomate.com) → **Crear con
 Copilot**, pega:
@@ -163,7 +169,7 @@ concat(body('Leer_documento')?['fields']?['contratoId']?['stringValue'], if(empt
 `NombreArchivo` (Redactar):
 <!-- expr:NombreArchivo -->
 ```
-concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', outputs('Entrada')?['preguntaId'], '_', convertFromUtc(utcNow(), 'SA Pacific Standard Time', 'yyyyMMdd-HHmmssfff'), '_', outputs('Entrada')?['nombre'])
+concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', outputs('Entrada')?['preguntaId'], '_', convertFromUtc(utcNow(), 'SA Pacific Standard Time', 'yyyyMMdd-HHmmssfff'), '_', replace(replace(outputs('Entrada')?['nombre'], '#', '-'), '%', '-'))
 ```
 
 `Crear_archivo` (OneDrive para la Empresa → Crear archivo):
@@ -173,7 +179,11 @@ concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', 
   ```
   concat('/RUTA/DE/TU/CARPETA/', outputs('Subcarpeta'))
   ```
-  Las subcarpetas que no existan se crean solas.
+  Si las subcarpetas no existen, «Crear archivo» las crea al guardar el
+  primer archivo. Así funciona hoy el conector, pero Microsoft no lo
+  documenta: compruébalo en la prueba (dentro de la carpeta raíz deben
+  aparecer `<contrato> - <nombre>/<AAAA-MM>`). Por lo mismo, una ruta raíz mal
+  escrita no da error: crea otra carpeta.
 - Nombre de archivo: `outputs('NombreArchivo')`
 - Contenido del archivo:
   <!-- expr:Contenido -->
@@ -183,11 +193,23 @@ concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', 
   No copies el base64 a variables ni a «Redactar»: es grande y llena el
   historial.
 
+  Al guardar, al salir y volver, o con solo seleccionar la acción, el
+  diseñador muestra este campo como `json(triggerBody())?['base64']`, sin
+  `base64ToBinary`. Es normal: la función sigue en el flujo (compruébalo en la
+  pestaña «Vista de código» de la acción). **No edites ese campo**: si lo
+  editas, el diseñador sí borra la función y el archivo se guarda como texto.
+  Si tienes que cambiarlo, bórralo completo y vuelve a pegar la expresión con
+  *fx*.
+
 `Crear_vinculo` (OneDrive para la Empresa → Crear vínculo de recurso
 compartido): Archivo = `body('Crear_archivo')?['Id']` · Tipo de vínculo: **Ver**
 · Ámbito de vínculo: **Organización**. Así el enlace solo abre con una cuenta
-de la organización. Si quienes revisan son externos, usa «Cualquier persona»,
-si tu organización lo permite.
+de la organización (no para invitados). Si quienes revisan son externos, elige
+la opción anónima (en el diseñador aparece como «Anónimo» o «Anonymous»; en
+OneDrive web se llama «Cualquier persona»), si tu organización lo permite.
+Pregunta a TI si en tu organización caducan los vínculos: si caducan, los
+enlaces guardados en la app dejarán de abrir pasado ese plazo, aunque el
+archivo siga en la carpeta.
 
 `Exito_codigo` (Establecer variable): `codigo` = `200`.
 
@@ -263,10 +285,11 @@ if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_
 | «El flujo «subirArchivo» no está configurado en Parámetros» | Falta la URL. | Pégala en Parámetros. |
 | «No se pudo conectar con el flujo…» | La respuesta no trae `Access-Control-Allow-Origin` (o lo trae dos veces). También: flujo apagado, «Quién puede desencadenar» distinto de «Cualquiera», o pasaron los 120 s. | Revisa la acción «Respuesta» y el historial de ejecuciones. |
 | «No se pudo verificar tu sesión o tu permiso…» | Falló `Leer_documento` o `Leer_contrato`. Firestore respondió 401 (token), 403 (reglas) o 404, o el proyecto de la URI no es `bitacora-contratistas`. | Mira el código en el historial. Con 403 o 404, la persona debe recargar la página; si sigue, revisa que el contrato sea suyo. |
-| «No se pudo guardar el archivo en OneDrive…» | Ruta mal escrita (con «Documentos» o el vínculo), conexión de otra cuenta, o OneDrive limitó las solicitudes. | Revisa `Crear_archivo` en el historial. |
+| «No se pudo guardar el archivo en OneDrive…» | Ruta con el vínculo para compartir (`https://…`), conexión de otra cuenta, o OneDrive limitó las solicitudes. | Revisa `Crear_archivo` en el historial. |
+| El enlace abre, pero el archivo no está en la carpeta raíz | La ruta raíz quedó mal escrita (por ejemplo con «Mis archivos» o «Documentos») y el conector creó otra carpeta. | Busca el archivo por su nombre en OneDrive y corrige `/RUTA/DE/TU/CARPETA`. |
 | «El flujo no devolvió el enlace del archivo» | No hay acción «Respuesta», tiene «Respuesta asincrónica» activada, o el cuerpo no trae `ok` y `url`. | Revisa la acción «Respuesta». |
-| El archivo se abre dañado o contiene texto | El diseñador quitó `base64ToBinary()` de «Contenido del archivo». Pasa si se edita el campo después de guardar. | En «Ver código» de `Crear_archivo`, verifica que siga `base64ToBinary(...)`. |
-| El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera. | Usa «Cualquier persona» si tu organización lo permite. |
+| El archivo se abre dañado o contiene texto | Se editó «Contenido del archivo» después de guardar y el diseñador borró `base64ToBinary()`, que hasta entonces solo estaba oculto. | En la pestaña «Vista de código» de `Crear_archivo`, verifica que diga `base64ToBinary(json(triggerBody())?['base64'])`; si no, borra el campo y vuelve a pegar la expresión completa. |
+| El enlace no abre para alguien | El vínculo es de «Organización» y la persona entra con una cuenta de fuera o de invitado, o la organización hace caducar los vínculos. | Para externos, usa el ámbito anónimo si tu organización lo permite. Si caducan, el archivo sigue en la carpeta: pide a TI una excepción. |
 
 Si la URL se filtra o hay abuso, regenera la clave del disparador (menú del
 flujo → regenerar la clave de acceso) y pega la URL nueva en Parámetros.
