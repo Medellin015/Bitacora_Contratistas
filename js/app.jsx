@@ -114,8 +114,10 @@ const App = () => {
   // Guarda de salida: una pantalla con algo que se perdería (p. ej. un archivo subiendo) la fija con
   // fijarGuardaSalida((tipo) => null | { titulo, mensaje }), donde tipo es 'navegar', 'contrato',
   // 'periodo', 'sesion' o 'cerrar'. Mientras tanto, esas salidas piden confirmación.
+  // Con la guarda puede venir vaciar(): guarda ya lo pendiente (se usa antes de cerrar la sesión).
   const guardaSalida = useRef(null);
-  const fijarGuardaSalida = useCallback((fn) => { guardaSalida.current = fn || null; }, []);
+  const vaciado = useRef(null);
+  const fijarGuardaSalida = useCallback((fn, vaciar) => { guardaSalida.current = fn || null; vaciado.current = (fn && vaciar) || null; }, []);
   const motivoSalida = (tipo) => { try { return guardaSalida.current ? guardaSalida.current(tipo) : null; } catch (e) { return null; } };
   const pedirSalida = useCallback(async (tipo = 'navegar') => {
     const m = motivoSalida(tipo);
@@ -127,32 +129,62 @@ const App = () => {
     return () => window.removeEventListener('beforeunload', avisarAlCerrar);
   }, []);
 
-  // Rutas. Un cambio de hash que no hizo la app (Atrás, Adelante, un enlace) pasa por la guarda: la
-  // URL vuelve, en la misma entrada del historial (replaceState: sin recorrerlo ni apilar entradas), a
-  // la de la pantalla actual mientras la persona decide y, si sale, se pone la pedida. Al cambiar de
-  // pantalla se cierra cualquier confirmación abierta (no sigue sobre otra pantalla).
+  // Rutas. Cada entrada del historial lleva su posición (history.state.idx). Un cambio de hash que no
+  // hizo la app (Atrás, Adelante, un enlace) pasa por la guarda: mientras la persona decide, esa
+  // entrada muestra la URL de la pantalla actual (replaceState). Al decidir recupera la suya y, si
+  // canceló un Atrás o un Adelante, se vuelve a la entrada de la pantalla (history.go): el historial
+  // queda como estaba. Sin posición (un enlace, location.replace) se cancela en esa misma entrada.
+  // Al cambiar de pantalla se cierra cualquier confirmación abierta (no sigue sobre otra pantalla).
   const ultimoHash = useRef(window.location.hash);
   const esperado = useRef(null);   // hash que la propia app acaba de pedir (navegar ya preguntó)
+  const volviendo = useRef(null);  // temporizador mientras se vuelve a la entrada de la pantalla
+  const indice = useRef(0);
+  const turno = useRef(0);
   useEffect(() => {
-    const ponerUrl = (h) => { try { window.history.replaceState(window.history.state, '', h || window.location.pathname + window.location.search); } catch (e) { /* nada */ } };
+    const idxDe = (st) => (st && typeof st.idx === 'number' ? st.idx : null);
+    const ponerUrl = (h, estado) => { try { window.history.replaceState(estado === undefined ? window.history.state : estado, '', h || window.location.pathname + window.location.search); } catch (e) { /* nada */ } };
+    const marcar = (idx) => ponerUrl(window.location.hash, { ...(window.history.state || {}), idx });
+    if (idxDe(window.history.state) === null) marcar(0);
+    indice.current = idxDe(window.history.state) || 0;
     const aplicar = (nuevo) => {
+      const idx = idxDe(window.history.state);
+      if (idx === null) marcar(indice.current + 1);
+      indice.current = idx === null ? indice.current + 1 : idx;
       if (nuevo === ultimoHash.current) return;
       ultimoHash.current = nuevo;
       setConfirmacion((p) => { if (p) p.resolver(false); return null; });
       setRuta(parsearRuta()); window.scrollTo({ top: 0 });
     };
+    // Si la vuelta no llega (posiciones que no cuadran) o cae en otra entrada, la URL se corrige ahí.
+    const terminarVuelta = () => {
+      clearTimeout(volviendo.current); volviendo.current = null;
+      if (window.location.hash !== ultimoHash.current) ponerUrl(ultimoHash.current);
+      const idx = idxDe(window.history.state);
+      if (idx !== null) indice.current = idx;
+    };
     const f = async () => {
+      if (volviendo.current) { terminarVuelta(); return; }
       const nuevo = window.location.hash;
       const propio = esperado.current !== null && nuevo === esperado.current;
       esperado.current = null;
       if (!propio && nuevo !== ultimoHash.current && motivoSalida('navegar')) {
+        const mio = ++turno.current;
+        const idxNuevo = idxDe(window.history.state);
+        const delta = idxNuevo === null ? 0 : idxNuevo - indice.current;
         ponerUrl(ultimoHash.current);
-        if (!(await pedirSalida('navegar'))) return;
+        const sale = await pedirSalida('navegar');
+        if (mio !== turno.current) return;   // llegó otro cambio mientras tanto: decide ese
         ponerUrl(nuevo);
+        if (!sale) {
+          if (delta) { volviendo.current = setTimeout(terminarVuelta, 1500); window.history.go(-delta); }
+          else ponerUrl(ultimoHash.current);
+          return;
+        }
       }
       aplicar(nuevo);
     };
-    window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f);
+    window.addEventListener('hashchange', f);
+    return () => { window.removeEventListener('hashchange', f); clearTimeout(volviendo.current); };
   }, [pedirSalida]);
   const navegar = useCallback(async (hash) => {
     if (!(await pedirSalida('navegar'))) return;
@@ -247,7 +279,7 @@ const App = () => {
   // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
   const cambiarVista = useCallback(async (vista) => {
     if (!(await pedirSalida('navegar'))) return;
-    guardaSalida.current = null;
+    guardaSalida.current = null; vaciado.current = null;
     vistaRef.current = vista;
     try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
     window.location.hash = '#/';
@@ -255,7 +287,10 @@ const App = () => {
   }, [cargarTodo, pedirSalida]);
   const cerrarSesion = useCallback(async () => {
     if (!(await pedirSalida('sesion'))) return;
-    guardaSalida.current = null;
+    // Lo pendiente del formulario se guarda antes de desconectar: sin sesión, las reglas lo rechazan.
+    const vaciar = vaciado.current;
+    guardaSalida.current = null; vaciado.current = null;
+    if (vaciar) { try { await Promise.race([Promise.resolve(vaciar()), U.esperar(5000)]); } catch (e) { /* se intentó */ } }
     await Auth.cerrarSesion();
     vistaRef.current = '';
     try { localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }

@@ -623,10 +623,12 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
  *  respuestasIniciales (objeto o null), puedeEditar(q, capitulo) → bool
  *  ultimoEnvio (para «Traer del mes anterior») · subir(archivo, q) → { url, id, nombre }
  *  onGuardar(respuestas, capituloId) (autoguardado, 3 s) · estadoGuardado { fecha, guardando, error }
+ *  controlRef: la página recibe { pendiente(), vaciar() } para saber si hay un autoguardado
+ *  pendiente y hacerlo ya (al cerrar la sesión o la pestaña)
  *  onEnviar(respuestasFinales) · onVistaPrevia(respuestasFinales) · textoEnviar · soloLectura
  *  capituloInicial
  */
-const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas }) => {
+const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
@@ -672,10 +674,10 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     if (primera.current) { primera.current = false; return undefined; }
     if (!guardarRef.current || soloLectura) return undefined;
     const guardar = () => {
-      if (enviandoRef.current || pendienteRef.current !== guardar) return;
+      if (enviandoRef.current || pendienteRef.current !== guardar) return undefined;
       pendienteRef.current = null;
       guardadasRef.current = respuestas;
-      guardarRef.current(respuestas, capituloRef.current);
+      return guardarRef.current(respuestas, capituloRef.current);
     };
     pendienteRef.current = guardar;
     temporizadorRef.current = setTimeout(guardar, ahoraRef.current ? 0 : 3000);
@@ -683,6 +685,14 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     return () => clearTimeout(temporizadorRef.current);
   }, [respuestas]); // eslint-disable-line
   useEffect(() => () => { if (pendienteRef.current && guardarRef.current) pendienteRef.current(); }, []);
+  useEffect(() => {
+    if (!controlRef) return undefined;
+    controlRef.current = {
+      pendiente: () => !!pendienteRef.current,
+      vaciar: () => { const g = pendienteRef.current; if (!g) return Promise.resolve(); clearTimeout(temporizadorRef.current); return Promise.resolve(g()); },
+    };
+    return () => { controlRef.current = null; };
+  }, []); // eslint-disable-line
   // A la página: respuestas, capítulo y si algo cambió desde que se abrió; y las subidas en curso
   // (con eso confirma la salida: app.fijarGuardaSalida).
   const inicialesRef = useRef(respuestas);
