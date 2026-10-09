@@ -102,18 +102,59 @@ const App = () => {
   const [ruta, setRuta] = useState(parsearRuta);
   const [demoListo, setDemoListo] = useState(!MODO_DEMO);
 
-  // Rutas
-  useEffect(() => { const f = () => { setRuta(parsearRuta()); window.scrollTo({ top: 0 }); }; window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f); }, []);
-  const navegar = useCallback((hash) => { if (window.location.hash === hash) setRuta(parsearRuta()); else window.location.hash = hash; }, []);
-
-  // Toasts y confirmaciones
+  // Toasts y confirmaciones. Una confirmación nueva cancela la que estuviera abierta (nadie queda esperando).
   const avisar = useCallback((tipo, mensaje) => {
     const id = U.idAleatorio();
     setToasts((t) => [...t.slice(-4), { id, tipo, mensaje }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tipo === 'error' ? 9000 : 5000);
   }, []);
-  const confirmar = useCallback((opciones) => new Promise((resolver) => setConfirmacion({ ...opciones, resolver })), []);
+  const confirmar = useCallback((opciones) => new Promise((resolver) => setConfirmacion((previa) => { if (previa) previa.resolver(false); return { ...opciones, resolver, clave: U.idAleatorio() }; })), []);
   const cerrarConfirmacion = (valor) => { if (confirmacion) confirmacion.resolver(valor); setConfirmacion(null); };
+
+  // Guarda de salida: una pantalla con algo que se perdería (p. ej. un archivo subiendo) la fija con
+  // fijarGuardaSalida(() => null | { titulo, mensaje }). Navegar, Atrás, cambiar de contrato o de
+  // período, cerrar sesión y cerrar o recargar la pestaña piden confirmación mientras tanto.
+  const guardaSalida = useRef(null);
+  const fijarGuardaSalida = useCallback((fn) => { guardaSalida.current = fn || null; }, []);
+  const motivoSalida = () => { try { return guardaSalida.current ? guardaSalida.current() : null; } catch (e) { return null; } };
+  const pedirSalida = useCallback(async () => {
+    const m = motivoSalida();
+    return !m || confirmar({ titulo: m.titulo, mensaje: m.mensaje, textoOk: 'Salir' });
+  }, [confirmar]);
+  useEffect(() => {
+    const avisarAlCerrar = (e) => { if (motivoSalida()) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', avisarAlCerrar);
+    return () => window.removeEventListener('beforeunload', avisarAlCerrar);
+  }, []);
+
+  // Rutas. Un cambio de hash que no hizo la app (Atrás, un enlace) pasa por la guarda: mientras la
+  // persona decide se vuelve a la ruta actual.
+  const ultimoHash = useRef(window.location.hash);
+  const cambioPropio = useRef(false);
+  useEffect(() => {
+    const f = async () => {
+      const nuevo = window.location.hash;
+      if (!cambioPropio.current && motivoSalida()) {
+        cambioPropio.current = true;
+        window.location.hash = ultimoHash.current;
+        if (!(await pedirSalida())) return;
+        cambioPropio.current = true;
+        window.location.hash = nuevo;
+        return;
+      }
+      cambioPropio.current = false;
+      if (nuevo === ultimoHash.current) return;
+      ultimoHash.current = nuevo;
+      setRuta(parsearRuta()); window.scrollTo({ top: 0 });
+    };
+    window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f);
+  }, [pedirSalida]);
+  const navegar = useCallback(async (hash) => {
+    if (!(await pedirSalida())) return;
+    if (window.location.hash === hash) { setRuta(parsearRuta()); return; }
+    cambioPropio.current = true;
+    window.location.hash = hash;
+  }, [pedirSalida]);
 
   // Tema
   const alternarTema = useCallback(() => {
@@ -189,21 +230,25 @@ const App = () => {
   }, [usuario, rol]);
   useEffect(() => { if (estado === 'listo') recargarContadores(); }, [estado, recargarContadores]);
 
-  const elegirContrato = useCallback((id) => { setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ } }, []);
-  const elegirPeriodo = useCallback((p) => setPeriodo(p), []);
+  const elegirContrato = useCallback(async (id) => { if (!(await pedirSalida())) return; setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ } }, [pedirSalida]);
+  const elegirPeriodo = useCallback(async (p) => { if (await pedirSalida()) setPeriodo(p); }, [pedirSalida]);
   // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
-  const cambiarVista = useCallback((vista) => {
+  const cambiarVista = useCallback(async (vista) => {
+    if (!(await pedirSalida())) return;
+    guardaSalida.current = null;
     vistaRef.current = vista;
     try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
     window.location.hash = '#/';
     cargarTodo();
-  }, [cargarTodo]);
+  }, [cargarTodo, pedirSalida]);
   const cerrarSesion = useCallback(async () => {
+    if (!(await pedirSalida())) return;
+    guardaSalida.current = null;
     await Auth.cerrarSesion();
     vistaRef.current = '';
     try { localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
     setUsuario(null); setRol(null); setPropios([]); setContratos([]); setEstado('anonimo'); window.location.hash = '#/';
-  }, []);
+  }, [pedirSalida]);
 
   const contrato = contratos.find((c) => c.id === contratoId) || null;
   const ventana = ventanas.find((v) => v.periodo === periodo) || null;
@@ -212,7 +257,7 @@ const App = () => {
     rol: usuario ? rol || usuario.rol : null, rolCuenta: usuario ? usuario.rol : null, propios,
     vista: usuario && rol === 'contratista' && usuario.rol !== 'contratista' ? 'contratista' : '',
     parametros, formularios, catalogos, contratos, contrato, contratoId, periodo, ventana, ventanas, contadores, tema, ruta,
-    navegar, avisar, confirmar, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, cambiarVista, recargarTodo: () => cargarTodo(true), recargarContadores,
+    navegar, avisar, confirmar, fijarGuardaSalida, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, cambiarVista, recargarTodo: () => cargarTodo(true), recargarContadores,
   };
 
   let contenido;
@@ -229,7 +274,7 @@ const App = () => {
       {contenido}
       <Toasts lista={toasts} onCerrar={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
       {confirmacion ? (
-        <Modal titulo={confirmacion.titulo || 'Confirmar'} onCerrar={() => cerrarConfirmacion(false)} pie={<><Boton onClick={() => cerrarConfirmacion(false)}>{confirmacion.textoCancelar || 'Cancelar'}</Boton><Boton variante={confirmacion.peligro ? 'peligro' : 'primario'} onClick={() => cerrarConfirmacion(true)}>{confirmacion.textoOk || 'Aceptar'}</Boton></>}>
+        <Modal key={confirmacion.clave} titulo={confirmacion.titulo || 'Confirmar'} onCerrar={() => cerrarConfirmacion(false)} pie={<><Boton onClick={() => cerrarConfirmacion(false)}>{confirmacion.textoCancelar || 'Cancelar'}</Boton><Boton variante={confirmacion.peligro ? 'peligro' : 'primario'} onClick={() => cerrarConfirmacion(true)}>{confirmacion.textoOk || 'Aceptar'}</Boton></>}>
           <p className="text-sm whitespace-pre-wrap">{confirmacion.mensaje}</p>
         </Modal>
       ) : null}

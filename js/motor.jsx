@@ -184,6 +184,8 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
     if (!nuevos.length) return;
     // Una subida a la vez por campo (también al soltar archivos): no se pasa del máximo.
     if (subiendo) { app.avisar('info', `Espera a que termine la subida en «${q.etiqueta}»`); return; }
+    // Mientras se envía no: el archivo no iría en el envío y el borrador ya borrado volvería.
+    if (motor && motor.enviando) { app.avisar('info', 'Espera a que termine el envío'); return; }
     if (lista.length + nuevos.length > maxArchivos) { app.avisar('alerta', `Máximo ${maxArchivos} ${U.plural(maxArchivos, 'archivo', 'archivos')} en «${q.etiqueta}»`); return; }
     for (const a of nuevos) {
       const ext = U.extension(a.name);
@@ -636,15 +638,16 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const respuestasRef = useRef(respuestas);
   respuestasRef.current = respuestas;
   const [subidas, setSubidas] = useState({});
+  const [intentoEnvio, setIntentoEnvio] = useState(false);
+  const [enviando, setEnviando] = useState(false);
   const ahoraRef = useRef(false);   // el próximo autoguardado va sin esperar (se adjuntó un archivo)
   const estadoMotor = useMemo(() => ({
     subidas: (clave) => subidas[clave] || 0,
     marcarSubida: (clave, d) => setSubidas((m) => { const n = (m[clave] || 0) + d; const c = { ...m }; if (n > 0) c[clave] = n; else delete c[clave]; return c; }),
     leer: (id) => respuestasRef.current[id],
     guardarYa: () => { ahoraRef.current = true; },
-  }), [subidas]);
-  const [intentoEnvio, setIntentoEnvio] = useState(false);
-  const [enviando, setEnviando] = useState(false);
+    enviando,
+  }), [subidas, enviando]);
   const ev = useMemo(() => Formulas.crearEvaluador({ formulario, respuestas, parametros: ctx.parametros }), [formulario, respuestas, ctx.parametros]);
   const obtener = useCallback((n) => ev.valor(n), [ev]);
   const visibleQ = (q) => (q.condicion ? Formulas.evaluarCondicion(q.condicion, obtener) : true);
@@ -669,7 +672,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     if (primera.current) { primera.current = false; return undefined; }
     if (!guardarRef.current || soloLectura) return undefined;
     const guardar = () => {
-      if (enviandoRef.current) return;
+      if (enviandoRef.current || pendienteRef.current !== guardar) return;
       pendienteRef.current = null;
       guardadasRef.current = respuestas;
       guardarRef.current(respuestas, capituloRef.current);
@@ -680,16 +683,11 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     return () => clearTimeout(temporizadorRef.current);
   }, [respuestas]); // eslint-disable-line
   useEffect(() => () => { if (pendienteRef.current && guardarRef.current) pendienteRef.current(); }, []);
-  useEffect(() => { if (onCambioRespuestas) onCambioRespuestas(respuestas, capituloId); }, [respuestas, capituloId]); // eslint-disable-line
-  // Subidas en curso: la página lo usa para confirmar «Salir»; cerrar o recargar la pestaña pide confirmación.
-  const haySubidas = Object.keys(subidas).length > 0;
+  // A la página: respuestas, capítulo y si algo cambió desde que se abrió; y las subidas en curso
+  // (con eso confirma la salida: app.fijarGuardaSalida).
+  const inicialesRef = useRef(respuestas);
+  useEffect(() => { if (onCambioRespuestas) onCambioRespuestas(respuestas, capituloId, respuestas !== inicialesRef.current); }, [respuestas, capituloId]); // eslint-disable-line
   useEffect(() => { if (onCambioSubidas) onCambioSubidas(Object.keys(subidas).length); }, [subidas]); // eslint-disable-line
-  useEffect(() => {
-    if (!haySubidas) return undefined;
-    const avisar = (e) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', avisar);
-    return () => window.removeEventListener('beforeunload', avisar);
-  }, [haySubidas]);
 
   // Si la plantilla cambia con el formulario abierto («Actualizar datos»), se infieren las marcas
   // sobre lo que ya hay, como al abrir. Solo si cambió de verdad: recargar crea objetos nuevos
@@ -796,7 +794,8 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     finally {
       enviandoRef.current = false;
       setEnviando(false);
-      if (enviado) { clearTimeout(temporizadorRef.current); pendienteRef.current = null; }
+      clearTimeout(temporizadorRef.current);
+      if (enviado) pendienteRef.current = null;
       else if (pendienteRef.current) pendienteRef.current();
     }
   };

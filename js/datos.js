@@ -18,7 +18,7 @@
   /* ===== 1. Semillas ===== */
   // Copia literal de referencia/formularios-semilla.json (la inserta el ensamblado).
   const KIT = {
-    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. COMPUESTA con filasDe: 'otraCompuesta' tiene una fila por cada fila de esa otra; subpregunta con precargarDe: 'compuesta.campo' (fila equivalente) o 'pregunta' (primer nivel) toma ese valor mientras la persona no lo cambie. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
+    "_comentario": "Semillas de formularios para el motor dinámico (esquema en PROMPT.md §7). Fórmulas: {idPregunta}; {fila.idSub} dentro de COMPUESTA; {compuesta.campo} como lista para suma(); {valor} solo en alertaSi. Funciones: si (perezosa), max, min, redondear, suma, SMMLV, tasaARL, param, enLetras. Tokens de porDefecto: hoy, inicioPeriodo, finPeriodo, consecutivo, usuario.*, contrato.*, contrato.info.*, fila.*, param.*. config.precargarUltimoEnvio solo habilita las preguntas marcadas con precargar. COMPUESTA con filasDe: 'otraCompuesta' tiene una fila por cada fila de esa otra; subpregunta con precargarDe: 'compuesta.campo' (fila equivalente) o 'pregunta' (primer nivel) toma ese valor mientras la persona no lo cambie. INFO_CONTRATO se guarda en contratos/{id}.info.{capituloId}.{preguntaId} (p. ej. info.contrato.numero, info.obligaciones.lista, info.contratista.rutaNas). desdeVersion: N en una pregunta o subpregunta = apareció en la versión base N; al corregir un envío hecho con una versión base anterior no se exige. Sin datos personales: todo lo variable sale del contrato, del usuario o de parametros/app.",
     "formularios": [
       {
         "id": "info_contrato",
@@ -517,6 +517,7 @@
                     "etiqueta": "Evidencia (nombre del soporte)",
                     "tipo": "TEXTO",
                     "obligatoria": true,
+                    "desdeVersion": 2,
                     "condicion": {
                       "pregunta": "fila.porcentaje",
                       "operador": "distinto",
@@ -529,6 +530,7 @@
                     "id": "evidenciaUrl",
                     "etiqueta": "Enlace de la evidencia (opcional)",
                     "tipo": "URL",
+                    "desdeVersion": 2,
                     "condicion": {
                       "pregunta": "fila.porcentaje",
                       "operador": "distinto",
@@ -540,6 +542,7 @@
                     "id": "evidenciaArchivo",
                     "etiqueta": "Archivo de la evidencia (opcional)",
                     "tipo": "ARCHIVO",
+                    "desdeVersion": 2,
                     "acepta": ".pdf,.docx,.xlsx,.jpg,.jpeg,.png",
                     "maxArchivos": 1,
                     "maxMB": 15,
@@ -1548,7 +1551,8 @@
     const fotoInforme = D ? D.armarFoto(fInforme, respuestasInforme, { contrato: contratoDemo, usuario: usuarioDemo, parametros, catalogos }) : [];
     const datosInforme = D ? D.armarDatosInforme({ respuestas: respuestasInforme, contrato: contratoDemo, usuario: usuarioDemo, catalogos, parametros }) : {};
     await A.set('envios', DB.idEnvio('P-00000-DE-2026', 'informe_mensual', pAnterior, 1), {
-      contratoId: 'P-00000-DE-2026', formularioId: 'informe_mensual', formularioVersion: Number(fInforme && fInforme.version) || 1, periodo: pAnterior, n: 1, contratistaUid: 'demo-contratista',
+      contratoId: 'P-00000-DE-2026', formularioId: 'informe_mensual', formularioVersion: Number(fInforme && fInforme.version) || 1,
+      formularioVersionBase: Number(fInforme && (fInforme.versionBase || fInforme.version)) || 1, periodo: pAnterior, n: 1, contratistaUid: 'demo-contratista',
       revisores: ['demo-revisor'], coordinadores: ['demo-coordinador'], consecutivo: 1, estado: 'aprobado', pasoActual: 'ninguno', enCorreccion: false, fechaLimiteCorreccion: null,
       respuestas: respuestasInforme, foto: fotoInforme, datosDescarga: datosInforme, anexos: [], totales: {},
       historial: historialAprobado, enviadoEn: historialAprobado[0].fecha, actualizadoEn: historialAprobado[2].fecha,

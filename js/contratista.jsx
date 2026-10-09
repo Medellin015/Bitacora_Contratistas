@@ -36,23 +36,28 @@ const completitudInfo = (formulario, contrato) => {
   const faltan = obligatorias.filter((q) => sinLlenar(R[q.id]));
   return { total: obligatorias.length, faltan: faltan.map((q) => q.etiqueta), porcentaje: obligatorias.length ? Math.round(((obligatorias.length - faltan.length) / obligatorias.length) * 100) : 100 };
 };
-// En corrección no se exige lo que la plantilla agregó después del envío (p. ej. la evidencia por
-// actividad de la v2 en un informe hecho con la v1): sigue visible, pero opcional. Una copia por
-// plantilla y envío, para que el motor no reciba una plantilla nueva en cada render.
+// En corrección no se exige lo que la plantilla base agregó después del envío: una pregunta o
+// subpregunta con desdeVersion mayor que la versión base del envío (p. ej. la evidencia por
+// actividad, desde la v2, en un informe hecho con la v1) sigue visible, pero opcional; si es una
+// compuesta, también sus subpreguntas. Los envíos anteriores a formularioVersionBase cuentan como v1.
+// Una copia por plantilla y versión, para que el motor no reciba una plantilla nueva en cada render.
 const plantillasDeCorreccion = new WeakMap();
 const sinExigirLoNuevo = (formulario, envio) => {
-  const R = (envio && envio.respuestas) || {};
-  let porEnvio = plantillasDeCorreccion.get(formulario);
-  if (!porEnvio) { porEnvio = new Map(); plantillasDeCorreccion.set(formulario, porEnvio); }
-  if (porEnvio.has(envio.id)) return porEnvio.get(envio.id);
-  const f = U.clonar(formulario);
-  (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => {
-    if (!(q.id in R)) { q.obligatoria = false; return; }
-    const filas = q.tipo === 'COMPUESTA' && Array.isArray(R[q.id]) ? R[q.id] : [];
-    if (filas.length) (q.subpreguntas || []).forEach((sub) => { if (filas.every((fila) => !fila || !(sub.id in fila))) sub.obligatoria = false; });
-  }));
-  porEnvio.set(envio.id, f);
-  return f;
+  const base = Number(envio && envio.formularioVersionBase) || 1;
+  const nueva = (x) => Number(x.desdeVersion) > base;
+  if (!(formulario.capitulos || []).some((c) => (c.preguntas || []).some((q) => nueva(q) || (q.subpreguntas || []).some(nueva)))) return formulario;
+  let porVersion = plantillasDeCorreccion.get(formulario);
+  if (!porVersion) { porVersion = new Map(); plantillasDeCorreccion.set(formulario, porVersion); }
+  if (!porVersion.has(base)) {
+    const f = U.clonar(formulario);
+    (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => {
+      const todaNueva = nueva(q);
+      if (todaNueva) q.obligatoria = false;
+      (q.subpreguntas || []).forEach((sub) => { if (todaNueva || nueva(sub)) sub.obligatoria = false; });
+    }));
+    porVersion.set(base, f);
+  }
+  return porVersion.get(base);
 };
 const correccionVigente = (envio, ahora = new Date()) => !!(envio && envio.enCorreccion && U.esFecha(envio.fechaLimiteCorreccion) && envio.fechaLimiteCorreccion >= ahora);
 const nombreFormulario = (app, id) => { const f = app.formularios.find((x) => x.id === id); return f ? f.nombre : id; };
@@ -546,6 +551,16 @@ const PaginaFormulario = () => {
   const subiendo = useRef(0);                // archivos subiendo (MotorFormulario.onCambioSubidas)
   const montado = useRef(true);
   useEffect(() => () => { montado.current = false; }, []);
+  // Salir con un archivo subiendo, o de una corrección con cambios (no tiene borrador), se confirma:
+  // con «Salir», los menús, Atrás, el contrato, el período o al cerrar la pestaña.
+  useEffect(() => {
+    app.fijarGuardaSalida(() => {
+      if (subiendo.current > 0) return { titulo: 'Hay un archivo subiendo', mensaje: 'Si sales ahora, el archivo que se está subiendo no quedará adjunto.' };
+      if (modo === 'correccion' && hayCambios.current) return { titulo: 'Salir sin reenviar', mensaje: 'En una corrección los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.' };
+      return null;
+    });
+    return () => app.fijarGuardaSalida(null);
+  }, [modo]); // eslint-disable-line
   const { datos, cargando, error } = useCarga(async () => {
     if (!formulario || !contrato) return null;
     const uid = app.usuario.id;
@@ -569,14 +584,14 @@ const PaginaFormulario = () => {
     const ultimo = lista.find((e) => e.id !== envioId) || null;
     let local;
     try { local = JSON.parse(localStorage.getItem(`bitacora.borrador.${idBorrador}`) || 'null'); } catch (e) { local = null; }
-    return { envio, periodo, idBorrador, borrador: borrador || (local && local.respuestas ? { ...local, actualizadoEn: new Date(local.actualizadoEn || Date.now()), soloLocal: true } : null), contador, enviosPeriodo, ultimo, usuarioFormulario };
+    return { envio, periodo, idBorrador, contratoId: contrato.id, formularioIdBorrador: formulario.id, borrador: borrador || (local && local.respuestas ? { ...local, actualizadoEn: new Date(local.actualizadoEn || Date.now()), soloLocal: true } : null), contador, enviosPeriodo, ultimo, usuarioFormulario };
   }, [formularioId, contrato && contrato.id, modo, envioId, app.periodo]);
 
   if (!formulario) return <Vacio icono="formulario" titulo="Formulario no encontrado" accion={<Boton onClick={() => app.navegar('#/inicio')}>Volver al inicio</Boton>} />;
   if (!contrato) return <Vacio icono="contrato" titulo="Elige un contrato" texto="Selecciona el contrato en la barra superior." />;
   if (cargando) return <Cargando texto="Preparando el formulario…" />;
   if (error) return <Alerta tipo="error">{DB.traducirError(error)}</Alerta>;
-  const { envio, periodo, idBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
+  const { envio, periodo, idBorrador, contratoId, formularioIdBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
   const enNombreDeOtro = app.rol !== 'contratista';
   const ahora = new Date();
   const rango = U.recortarPeriodo(periodo, contrato);
@@ -614,7 +629,8 @@ const PaginaFormulario = () => {
   };
   const guardarBorrador = async (respuestas, capituloActual) => {
     if (esLectura) return;
-    const doc = { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas, capituloActual: capituloActual || null };
+    // Con el contrato y el formulario del id del borrador (no los de pantalla, que pueden haber cambiado).
+    const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, respuestas, capituloActual: capituloActual || null };
     ultimoGuardado.current = doc;
     setEstadoGuardado((s) => ({ ...s, guardando: true }));
     try { localStorage.setItem(`bitacora.borrador.${idBorrador}`, JSON.stringify({ ...doc, actualizadoEn: new Date().toISOString() })); } catch (e) { /* sin espacio */ }
@@ -627,7 +643,7 @@ const PaginaFormulario = () => {
     // corrección lee el envío. Sin flujo configurado no hace falta (subirArchivo avisa de una vez).
     // Sin red, Firestore no confirma la escritura: a los 15 s se avisa en vez de dejar la subida girando.
     if (!esCorreccion && respuestasActuales.current && (window.MODO_DEMO || Flujos.disponible('subirArchivo'))) {
-      const doc = { uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id, periodo, respuestas: respuestasActuales.current, capituloActual: capituloActual.current || null };
+      const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, respuestas: respuestasActuales.current, capituloActual: capituloActual.current || null };
       ultimoGuardado.current = doc;
       const guardado = await Promise.race([DB.guardarBorrador(idBorrador, doc).then(() => true, (e) => e || new Error('Error desconocido')), U.esperar(15000).then(() => null)]);
       if (guardado === null) { const e = new Error('Sin conexión: no se pudo guardar el borrador antes de subir. Revisa la red e inténtalo de nuevo'); e.code = 'sin-red'; throw e; }
@@ -638,12 +654,6 @@ const PaginaFormulario = () => {
       if (!montado.current) { const e = new Error('Saliste del formulario antes de que empezara la subida; no se subió'); e.code = 'cancelado'; throw e; }
     }
     return Flujos.subirArchivo({ origen: esCorreccion ? 'envio' : 'borrador', docId: esCorreccion ? envio.id : idBorrador, preguntaId: pregunta.id, archivo, maxMB: pregunta.maxMB || 15 });
-  };
-  // Salir con un archivo subiendo, o de una corrección con cambios (no tiene borrador), se confirma.
-  const salir = async () => {
-    if (subiendo.current > 0 && !(await app.confirmar({ titulo: 'Hay un archivo subiendo', mensaje: 'Si sales ahora, el archivo que se está subiendo no quedará adjunto.', textoOk: 'Salir' }))) return;
-    if (esCorreccion && hayCambios.current && !(await app.confirmar({ titulo: 'Salir sin reenviar', mensaje: 'En una corrección los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.', textoOk: 'Salir' }))) return;
-    app.navegar('#/inicio');
   };
   const armarDocumentos = async (respuestas, voBoTexto) => {
     const foto = Descargas.armarFoto(formulario, respuestas, { catalogos: app.catalogos, parametros: app.parametros });
@@ -678,6 +688,7 @@ const PaginaFormulario = () => {
         try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ }
         app.avisar('exito', 'Corrección reenviada');
         app.recargarContadores();
+        hayCambios.current = false;
         app.navegar('#/envios');
         return true;
       }
@@ -685,7 +696,8 @@ const PaginaFormulario = () => {
       const consecutivo = Number(respuestas.numeroInforme || respuestas.numeroCuenta) || consecutivoSugerido;
       if (contador && consecutivo <= Number(contador.ultimo)) { app.avisar('error', `El consecutivo debe ser mayor que ${contador.ultimo}`); return; }
       const envioNuevo = {
-        contratoId: contrato.id, formularioId: formulario.id, formularioVersion: Number(formulario.version) || 1, periodo, n: enviosPeriodo.length + 1,
+        contratoId: contrato.id, formularioId: formulario.id, formularioVersion: Number(formulario.version) || 1,
+        formularioVersionBase: Number(formulario.versionBase || formulario.version) || 1, periodo, n: enviosPeriodo.length + 1,
         contratistaUid: contrato.contratistaUid, revisores: contrato.revisores || [], coordinadores: contrato.coordinadores || [],
         estado: 'enviado', pasoActual: flujo.length > 1 ? flujo[1] : 'ninguno', enCorreccion: false, fechaLimiteCorreccion: null,
         respuestas, ...docs,
@@ -710,11 +722,13 @@ const PaginaFormulario = () => {
       <Encabezado titulo={titulo} subtitulo={`${contrato.numero} · ${U.nombrePeriodo(periodo)}${rango ? ` · ${U.textoPeriodo(rango.desde, rango.hasta)}` : ''}${esCorreccion ? ` · plazo ${U.fechaHora(envio.fechaLimiteCorreccion)}` : ''}`} migas={[{ texto: 'Inicio', onClick: () => app.navegar('#/inicio') }, { texto: formulario.nombre }]} />
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
-      <MotorFormulario key={`${formulario.id}-${decisionBorrador}`} formulario={esCorreccion ? sinExigirLoNuevo(formulario, envio) : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
+      {/* La clave cambia con el contrato, el período o el envío: el motor se monta de nuevo (lo
+          pendiente del anterior se guarda en su propio borrador, no en el del contexto nuevo). */}
+      <MotorFormulario key={`${idBorrador}-${envio ? envio.id : ''}-${decisionBorrador}`} formulario={esCorreccion ? sinExigirLoNuevo(formulario, envio) : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
         subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : undefined}
-        acciones={<Boton variante="fantasma" onClick={salir}>Salir</Boton>}
-        onCambioRespuestas={(r, c) => { if (respuestasActuales.current && r !== respuestasActuales.current) hayCambios.current = true; respuestasActuales.current = r; capituloActual.current = c; }}
+        acciones={<Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>}
+        onCambioRespuestas={(r, c, cambiado) => { respuestasActuales.current = r; capituloActual.current = c; hayCambios.current = cambiado; }}
         onCambioSubidas={(n) => { subiendo.current = n; }} />
       {previa ? <VistaPreviaDocx titulo={`Vista previa · ${formulario.nombre}`} generar={previa.generar} onCerrar={() => setPrevia(null)} /> : null}
     </div>
