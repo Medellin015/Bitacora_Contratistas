@@ -358,6 +358,8 @@
   });
   const agrupar = (arr, fn) => arr.reduce((acc, x) => { const k = fn(x); (acc[k] = acc[k] || []).push(x); return acc; }, {});
   const unicos = (arr) => Array.from(new Set(arr));
+  // Ids de las preguntas de una plantilla y de las subpreguntas de sus compuestas («compuesta.sub»).
+  const camposDePlantilla = (f) => ((f && f.capitulos) || []).flatMap((c) => (c.preguntas || []).flatMap((q) => [q.id, ...(q.subpreguntas || []).map((s) => `${q.id}.${s.id}`)]));
 
   /* ===== 7. Varios ===== */
   const debounce = (fn, ms) => { let t; const d = (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; d.cancelar = () => clearTimeout(t); return d; };
@@ -411,7 +413,7 @@
     escaparHTML, sanitizarHTML, normalizarCorreo, soloDigitos, sanearNombreArchivo, esURL, esCorreo, esTelefono, sinTildes, slug, limitar,
     nombreCorto, iniciales, plural, reemplazarVariables,
     descargarBlob, descargarTexto, leerArchivoDataURL, leerArchivoBase64, leerArchivoArrayBuffer, uint8DeBase64, base64DeArrayBuffer, tamanoLegible, extension,
-    clonar, igualProfundo, obtenerRuta, ponerRuta, aplanar, diferencias, sinIndefinidos, ordenarPor, agrupar, unicos,
+    clonar, igualProfundo, obtenerRuta, ponerRuta, aplanar, diferencias, sinIndefinidos, ordenarPor, agrupar, unicos, camposDePlantilla,
     debounce, esperar, idAleatorio, tiempoRelativo, cuentaRegresiva, estadoVentana, textoVentana, esMovil, valorLegible,
   };
 })(window);

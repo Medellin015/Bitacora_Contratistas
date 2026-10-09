@@ -256,7 +256,11 @@ const Modal = ({ titulo, onCerrar, children, pie, ancho, descripcion }) => {
     document.addEventListener('keydown', tecla);
     const desb = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { document.removeEventListener('keydown', tecla); document.body.style.overflow = desb; if (anterior && anterior.focus) anterior.focus(); };
+    // Devuelve el foco sin que un desplegable se abra solo (Combobox mira dataset.sinAbrir).
+    return () => {
+      document.removeEventListener('keydown', tecla); document.body.style.overflow = desb;
+      if (anterior && anterior.focus) { if (anterior.dataset) anterior.dataset.sinAbrir = '1'; anterior.focus(); if (anterior.dataset) delete anterior.dataset.sinAbrir; }
+    };
   }, []); // eslint-disable-line
   // No se cierra al soltar sobre el fondo tras seleccionar texto: solo con clic que empieza y termina en el fondo.
   const inicio = useRef(false);

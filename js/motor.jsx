@@ -688,6 +688,8 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const inicialesRef = useRef(respuestas);
   useEffect(() => { if (onCambioRespuestas) onCambioRespuestas(respuestas, capituloId, respuestas !== inicialesRef.current); }, [respuestas, capituloId]); // eslint-disable-line
   useEffect(() => { if (onCambioSubidas) onCambioSubidas(Object.keys(subidas).length); }, [subidas]); // eslint-disable-line
+  // Al desmontarse (salir, o cambiar de contrato o período) ya no hay subidas ni cambios que cuidar.
+  useEffect(() => () => { if (onCambioSubidas) onCambioSubidas(0); if (onCambioRespuestas) onCambioRespuestas(null, null, false); }, []); // eslint-disable-line
 
   // Si la plantilla cambia con el formulario abierto («Actualizar datos»), se infieren las marcas
   // sobre lo que ya hay, como al abrir. Solo si cambió de verdad: recargar crea objetos nuevos

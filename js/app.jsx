@@ -112,48 +112,55 @@ const App = () => {
   const cerrarConfirmacion = (valor) => { if (confirmacion) confirmacion.resolver(valor); setConfirmacion(null); };
 
   // Guarda de salida: una pantalla con algo que se perdería (p. ej. un archivo subiendo) la fija con
-  // fijarGuardaSalida(() => null | { titulo, mensaje }). Navegar, Atrás, cambiar de contrato o de
-  // período, cerrar sesión y cerrar o recargar la pestaña piden confirmación mientras tanto.
+  // fijarGuardaSalida((tipo) => null | { titulo, mensaje }), donde tipo es 'navegar', 'contrato',
+  // 'periodo', 'sesion' o 'cerrar'. Mientras tanto, esas salidas piden confirmación.
   const guardaSalida = useRef(null);
   const fijarGuardaSalida = useCallback((fn) => { guardaSalida.current = fn || null; }, []);
-  const motivoSalida = () => { try { return guardaSalida.current ? guardaSalida.current() : null; } catch (e) { return null; } };
-  const pedirSalida = useCallback(async () => {
-    const m = motivoSalida();
+  const motivoSalida = (tipo) => { try { return guardaSalida.current ? guardaSalida.current(tipo) : null; } catch (e) { return null; } };
+  const pedirSalida = useCallback(async (tipo = 'navegar') => {
+    const m = motivoSalida(tipo);
     return !m || confirmar({ titulo: m.titulo, mensaje: m.mensaje, textoOk: 'Salir' });
   }, [confirmar]);
   useEffect(() => {
-    const avisarAlCerrar = (e) => { if (motivoSalida()) { e.preventDefault(); e.returnValue = ''; } };
+    const avisarAlCerrar = (e) => { if (motivoSalida('cerrar')) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', avisarAlCerrar);
     return () => window.removeEventListener('beforeunload', avisarAlCerrar);
   }, []);
 
-  // Rutas. Un cambio de hash que no hizo la app (Atrás, un enlace) pasa por la guarda: mientras la
-  // persona decide se vuelve a la ruta actual.
+  // Rutas. Un cambio de hash que no hizo la app (Atrás, Adelante, un enlace) pasa por la guarda: la
+  // URL vuelve, en la misma entrada del historial (replaceState: sin recorrerlo ni apilar entradas), a
+  // la de la pantalla actual mientras la persona decide y, si sale, se pone la pedida. Al cambiar de
+  // pantalla se cierra cualquier confirmación abierta (no sigue sobre otra pantalla).
   const ultimoHash = useRef(window.location.hash);
-  const cambioPropio = useRef(false);
+  const esperado = useRef(null);   // hash que la propia app acaba de pedir (navegar ya preguntó)
   useEffect(() => {
-    const f = async () => {
-      const nuevo = window.location.hash;
-      if (!cambioPropio.current && motivoSalida()) {
-        cambioPropio.current = true;
-        window.location.hash = ultimoHash.current;
-        if (!(await pedirSalida())) return;
-        cambioPropio.current = true;
-        window.location.hash = nuevo;
-        return;
-      }
-      cambioPropio.current = false;
+    const ponerUrl = (h) => { try { window.history.replaceState(window.history.state, '', h || window.location.pathname + window.location.search); } catch (e) { /* nada */ } };
+    const aplicar = (nuevo) => {
       if (nuevo === ultimoHash.current) return;
       ultimoHash.current = nuevo;
+      setConfirmacion((p) => { if (p) p.resolver(false); return null; });
       setRuta(parsearRuta()); window.scrollTo({ top: 0 });
+    };
+    const f = async () => {
+      const nuevo = window.location.hash;
+      const propio = esperado.current !== null && nuevo === esperado.current;
+      esperado.current = null;
+      if (!propio && nuevo !== ultimoHash.current && motivoSalida('navegar')) {
+        ponerUrl(ultimoHash.current);
+        if (!(await pedirSalida('navegar'))) return;
+        ponerUrl(nuevo);
+      }
+      aplicar(nuevo);
     };
     window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f);
   }, [pedirSalida]);
   const navegar = useCallback(async (hash) => {
-    if (!(await pedirSalida())) return;
-    if (window.location.hash === hash) { setRuta(parsearRuta()); return; }
-    cambioPropio.current = true;
+    if (!(await pedirSalida('navegar'))) return;
+    const antes = window.location.hash;
     window.location.hash = hash;
+    // Se compara con lo que quedó en la barra (ya codificado), que es lo que llega en hashchange.
+    if (window.location.hash === antes) { setRuta(parsearRuta()); return; }
+    esperado.current = window.location.hash;
   }, [pedirSalida]);
 
   // Tema
@@ -230,11 +237,16 @@ const App = () => {
   }, [usuario, rol]);
   useEffect(() => { if (estado === 'listo') recargarContadores(); }, [estado, recargarContadores]);
 
-  const elegirContrato = useCallback(async (id) => { if (!(await pedirSalida())) return; setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ } }, [pedirSalida]);
-  const elegirPeriodo = useCallback(async (p) => { if (await pedirSalida()) setPeriodo(p); }, [pedirSalida]);
+  const contratoActual = useRef(contratoId); contratoActual.current = contratoId;
+  const periodoActual = useRef(periodo); periodoActual.current = periodo;
+  const elegirContrato = useCallback(async (id) => {
+    if (id === contratoActual.current || !(await pedirSalida('contrato'))) return;
+    setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ }
+  }, [pedirSalida]);
+  const elegirPeriodo = useCallback(async (p) => { if (p !== periodoActual.current && (await pedirSalida('periodo'))) setPeriodo(p); }, [pedirSalida]);
   // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
   const cambiarVista = useCallback(async (vista) => {
-    if (!(await pedirSalida())) return;
+    if (!(await pedirSalida('navegar'))) return;
     guardaSalida.current = null;
     vistaRef.current = vista;
     try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
@@ -242,7 +254,7 @@ const App = () => {
     cargarTodo();
   }, [cargarTodo, pedirSalida]);
   const cerrarSesion = useCallback(async () => {
-    if (!(await pedirSalida())) return;
+    if (!(await pedirSalida('sesion'))) return;
     guardaSalida.current = null;
     await Auth.cerrarSesion();
     vistaRef.current = '';

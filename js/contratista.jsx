@@ -36,28 +36,49 @@ const completitudInfo = (formulario, contrato) => {
   const faltan = obligatorias.filter((q) => sinLlenar(R[q.id]));
   return { total: obligatorias.length, faltan: faltan.map((q) => q.etiqueta), porcentaje: obligatorias.length ? Math.round(((obligatorias.length - faltan.length) / obligatorias.length) * 100) : 100 };
 };
-// En corrección no se exige lo que la plantilla base agregó después del envío: una pregunta o
-// subpregunta con desdeVersion mayor que la versión base del envío (p. ej. la evidencia por
-// actividad, desde la v2, en un informe hecho con la v1) sigue visible, pero opcional; si es una
-// compuesta, también sus subpreguntas. Los envíos anteriores a formularioVersionBase cuentan como v1.
-// Una copia por plantilla y versión, para que el motor no reciba una plantilla nueva en cada render.
+// En corrección no se exige lo que no estaba en la plantilla con que se hizo el envío: los envíos
+// guardan sus campos (camposPlantilla); en los anteriores se deduce de las respuestas guardadas. Lo
+// que no estaba sigue visible, pero opcional (si es una compuesta, también sus subpreguntas).
+// Devuelve { plantilla, relajados } y se guarda por plantilla y envío (el motor no recibe una
+// plantilla nueva en cada render).
 const plantillasDeCorreccion = new WeakMap();
 const sinExigirLoNuevo = (formulario, envio) => {
-  const base = Number(envio && envio.formularioVersionBase) || 1;
-  const nueva = (x) => Number(x.desdeVersion) > base;
-  if (!(formulario.capitulos || []).some((c) => (c.preguntas || []).some((q) => nueva(q) || (q.subpreguntas || []).some(nueva)))) return formulario;
-  let porVersion = plantillasDeCorreccion.get(formulario);
-  if (!porVersion) { porVersion = new Map(); plantillasDeCorreccion.set(formulario, porVersion); }
-  if (!porVersion.has(base)) {
-    const f = U.clonar(formulario);
-    (f.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => {
-      const todaNueva = nueva(q);
-      if (todaNueva) q.obligatoria = false;
-      (q.subpreguntas || []).forEach((sub) => { if (todaNueva || nueva(sub)) sub.obligatoria = false; });
-    }));
-    porVersion.set(base, f);
-  }
-  return porVersion.get(base);
+  let porEnvio = plantillasDeCorreccion.get(formulario);
+  if (!porEnvio) { porEnvio = new WeakMap(); plantillasDeCorreccion.set(formulario, porEnvio); }
+  if (porEnvio.has(envio)) return porEnvio.get(envio);
+  const lista = Array.isArray(envio.camposPlantilla) ? new Set(envio.camposPlantilla) : null;
+  const R = envio.respuestas || {};
+  const estaba = (q, sub) => {
+    if (lista) return lista.has(sub ? `${q.id}.${sub.id}` : q.id);
+    if (!(q.id in R)) return false;
+    // Las filas que arma el motor traen todas sus subpreguntas: si a alguna le falta, no estaba (o
+    // quedó vacía al reenviar una corrección anterior, ver sinNuevosVacios). Sin filas no se sabe.
+    const filas = Array.isArray(R[q.id]) ? R[q.id] : [];
+    return !sub || filas.every((f) => f && sub.id in f);
+  };
+  const relajados = [];
+  const plantilla = U.clonar(formulario);
+  (plantilla.capitulos || []).forEach((c) => (c.preguntas || []).forEach((q) => {
+    const nueva = !estaba(q);
+    if (nueva && q.obligatoria) { q.obligatoria = false; relajados.push(q.id); }
+    (q.subpreguntas || []).forEach((sub) => { if (sub.obligatoria && (nueva || !estaba(q, sub))) { sub.obligatoria = false; relajados.push(`${q.id}.${sub.id}`); } });
+  }));
+  const r = { plantilla: relajados.length ? plantilla : formulario, relajados };
+  porEnvio.set(envio, r);
+  return r;
+};
+// Al reenviar la corrección de un envío sin camposPlantilla, lo nuevo que quedó vacío no se guarda:
+// así la próxima corrección vuelve a deducir que no estaba (y no lo exige).
+const sinNuevosVacios = (respuestas, relajados) => {
+  if (!relajados.length) return respuestas;
+  const R = { ...respuestas };
+  const filaVacia = (f) => !f || Object.keys(f).every((k) => k.startsWith('_') || sinLlenar(f[k]));
+  relajados.forEach((ruta) => {
+    const [qid, sid] = ruta.split('.');
+    if (!sid) { if (sinLlenar(R[qid]) || (Array.isArray(R[qid]) && R[qid].every(filaVacia))) delete R[qid]; return; }
+    if (Array.isArray(R[qid])) R[qid] = R[qid].map((f) => { if (!f || !(sid in f) || !sinLlenar(f[sid])) return f; const c = { ...f }; delete c[sid]; return c; });
+  });
+  return R;
 };
 const correccionVigente = (envio, ahora = new Date()) => !!(envio && envio.enCorreccion && U.esFecha(envio.fechaLimiteCorreccion) && envio.fechaLimiteCorreccion >= ahora);
 const nombreFormulario = (app, id) => { const f = app.formularios.find((x) => x.id === id); return f ? f.nombre : id; };
@@ -540,10 +561,12 @@ const PaginaFormulario = () => {
   const modo = q.modo || 'nuevo';
   const envioId = q.envio ? decodeURIComponent(q.envio) : '';
   const formulario = app.formularios.find((f) => f.id === formularioId);
-  const contrato = app.contrato;
+  const contratoBarra = app.contrato;
   const [previa, setPrevia] = useState(null);
   const [estadoGuardado, setEstadoGuardado] = useState({ fecha: null, guardando: false, error: null });
-  const [decisionBorrador, setDecisionBorrador] = useState(null); // null | 'continuar' | 'nuevo'
+  // Decisión sobre el borrador ('continuar' | 'nuevo') de ESTOS datos: al cambiar de contrato o de
+  // período se vuelve a preguntar por el borrador del contexto nuevo.
+  const [decision, setDecision] = useState({ para: null, valor: null });
   const ultimoGuardado = useRef(null);
   const respuestasActuales = useRef(null);   // lo que hay en pantalla (MotorFormulario.onCambioRespuestas)
   const capituloActual = useRef(null);       // el capítulo en pantalla, para el borrador que se guarda al subir
@@ -554,17 +577,25 @@ const PaginaFormulario = () => {
   // Salir con un archivo subiendo, o de una corrección con cambios (no tiene borrador), se confirma:
   // con «Salir», los menús, Atrás, el contrato, el período o al cerrar la pestaña.
   useEffect(() => {
-    app.fijarGuardaSalida(() => {
-      if (subiendo.current > 0) return { titulo: 'Hay un archivo subiendo', mensaje: 'Si sales ahora, el archivo que se está subiendo no quedará adjunto.' };
-      if (modo === 'correccion' && hayCambios.current) return { titulo: 'Salir sin reenviar', mensaje: 'En una corrección los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.' };
+    app.fijarGuardaSalida((tipo) => {
+      // Una corrección o consulta usa el contrato y el período del envío: la barra no la cambia.
+      if (envioId && (tipo === 'contrato' || tipo === 'periodo')) return null;
+      const archivo = subiendo.current > 0;
+      const cambios = modo === 'correccion' && hayCambios.current;
+      if (archivo && cambios) return { titulo: 'Salir sin reenviar', mensaje: 'Hay un archivo subiendo que no quedará adjunto y, en una corrección, los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.' };
+      if (archivo) return { titulo: 'Hay un archivo subiendo', mensaje: 'Si sales ahora, el archivo que se está subiendo no quedará adjunto.' };
+      if (cambios) return { titulo: 'Salir sin reenviar', mensaje: 'En una corrección los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.' };
       return null;
     });
     return () => app.fijarGuardaSalida(null);
-  }, [modo]); // eslint-disable-line
+  }, [modo, envioId]); // eslint-disable-line
   const { datos, cargando, error } = useCarga(async () => {
-    if (!formulario || !contrato) return null;
+    if (!formulario) return null;
     const uid = app.usuario.id;
     const envio = envioId ? await DB.obtenerEnvio(envioId) : null;
+    // Corrección o consulta: el contrato es el del envío, no el elegido en la barra.
+    const contrato = envio ? (app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId)) : contratoBarra;
+    if (!contrato) return null;
     const periodo = envio ? envio.periodo : app.periodo;
     // El admin diligencia en nombre del contratista: los datos del Word salen del perfil del contratista, no del suyo.
     let usuarioFormulario = app.usuario;
@@ -584,18 +615,22 @@ const PaginaFormulario = () => {
     const ultimo = lista.find((e) => e.id !== envioId) || null;
     let local;
     try { local = JSON.parse(localStorage.getItem(`bitacora.borrador.${idBorrador}`) || 'null'); } catch (e) { local = null; }
-    return { envio, periodo, idBorrador, contratoId: contrato.id, formularioIdBorrador: formulario.id, borrador: borrador || (local && local.respuestas ? { ...local, actualizadoEn: new Date(local.actualizadoEn || Date.now()), soloLocal: true } : null), contador, enviosPeriodo, ultimo, usuarioFormulario };
-  }, [formularioId, contrato && contrato.id, modo, envioId, app.periodo]);
+    return { envio, contrato, periodo, idBorrador, contratoId: contrato.id, formularioIdBorrador: formulario.id, borrador: borrador || (local && local.respuestas ? { ...local, actualizadoEn: new Date(local.actualizadoEn || Date.now()), soloLocal: true } : null), contador, enviosPeriodo, ultimo, usuarioFormulario };
+  }, [formularioId, envioId ? '' : contratoBarra && contratoBarra.id, modo, envioId, envioId ? '' : app.periodo]);
 
   if (!formulario) return <Vacio icono="formulario" titulo="Formulario no encontrado" accion={<Boton onClick={() => app.navegar('#/inicio')}>Volver al inicio</Boton>} />;
-  if (!contrato) return <Vacio icono="contrato" titulo="Elige un contrato" texto="Selecciona el contrato en la barra superior." />;
+  if (!contratoBarra && !envioId) return <Vacio icono="contrato" titulo="Elige un contrato" texto="Selecciona el contrato en la barra superior." />;
   if (cargando) return <Cargando texto="Preparando el formulario…" />;
   if (error) return <Alerta tipo="error">{DB.traducirError(error)}</Alerta>;
-  const { envio, periodo, idBorrador, contratoId, formularioIdBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
+  if (!datos) return <Vacio icono="contrato" titulo="Elige un contrato" texto="Selecciona el contrato en la barra superior." />;
+  const { envio, contrato, periodo, idBorrador, contratoId, formularioIdBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
+  const decisionBorrador = decision.para === datos ? decision.valor : null;
+  const setDecisionBorrador = (valor) => setDecision({ para: datos, valor });
   const enNombreDeOtro = app.rol !== 'contratista';
   const ahora = new Date();
   const rango = U.recortarPeriodo(periodo, contrato);
   const esCorreccion = modo === 'correccion';
+  const correccion = esCorreccion && envio ? sinExigirLoNuevo(formulario, envio) : null;
   const esLectura = modo === 'ver';
   const ventanaOk = !requiereVentana(formulario) || U.estadoVentana(app.ventana, formulario.id, ahora).estado === 'abierta';
   const limite = limiteDe(formulario);
@@ -669,7 +704,9 @@ const PaginaFormulario = () => {
     const envioTemporal = { ...docs, formularioId: formulario.id, contratoId: contrato.id, periodo, estado: 'borrador', consecutivo: respuestas.numeroInforme || respuestas.numeroCuenta || consecutivoSugerido, respuestas };
     setPrevia({ generar: () => Descargas.generarDocx({ envio: envioTemporal, formulario, contrato, usuario: usuarioFormulario, parametros: app.parametros, firma }) });
   };
-  const enviar = async (respuestas) => {
+  const enviar = async (respuestasMotor) => {
+    // Corrección de un envío sin camposPlantilla: lo nuevo que quedó vacío no se guarda (sinNuevosVacios).
+    const respuestas = correccion && !Array.isArray(envio.camposPlantilla) ? sinNuevosVacios(respuestasMotor, correccion.relajados) : respuestasMotor;
     const texto = esCorreccion ? '¿Reenviar el envío corregido? Volverá al revisor en el mismo paso.' : `¿Enviar ${formulario.nombre} de ${U.nombrePeriodo(periodo)}? ${limite != null ? 'Después de enviar solo podrás cambiarlo con una solicitud de corrección.' : ''}`;
     if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
     try {
@@ -697,7 +734,7 @@ const PaginaFormulario = () => {
       if (contador && consecutivo <= Number(contador.ultimo)) { app.avisar('error', `El consecutivo debe ser mayor que ${contador.ultimo}`); return; }
       const envioNuevo = {
         contratoId: contrato.id, formularioId: formulario.id, formularioVersion: Number(formulario.version) || 1,
-        formularioVersionBase: Number(formulario.versionBase || formulario.version) || 1, periodo, n: enviosPeriodo.length + 1,
+        camposPlantilla: U.camposDePlantilla(formulario), periodo, n: enviosPeriodo.length + 1,
         contratistaUid: contrato.contratistaUid, revisores: contrato.revisores || [], coordinadores: contrato.coordinadores || [],
         estado: 'enviado', pasoActual: flujo.length > 1 ? flujo[1] : 'ninguno', enCorreccion: false, fechaLimiteCorreccion: null,
         respuestas, ...docs,
@@ -723,8 +760,9 @@ const PaginaFormulario = () => {
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
       {/* La clave cambia con el contrato, el período o el envío: el motor se monta de nuevo (lo
-          pendiente del anterior se guarda en su propio borrador, no en el del contexto nuevo). */}
-      <MotorFormulario key={`${idBorrador}-${envio ? envio.id : ''}-${decisionBorrador}`} formulario={esCorreccion ? sinExigirLoNuevo(formulario, envio) : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
+          pendiente del anterior se guarda en su propio borrador, no en el del contexto nuevo).
+          Una corrección o consulta solo depende de su envío. */}
+      <MotorFormulario key={envio ? `envio-${envio.id}` : `${idBorrador}-${decisionBorrador}`} formulario={correccion ? correccion.plantilla : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
         subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : undefined}
         acciones={<Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>}
