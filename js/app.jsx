@@ -129,62 +129,105 @@ const App = () => {
     return () => window.removeEventListener('beforeunload', avisarAlCerrar);
   }, []);
 
-  // Rutas. Cada entrada del historial lleva su posición (history.state.idx). Un cambio de hash que no
-  // hizo la app (Atrás, Adelante, un enlace) pasa por la guarda: mientras la persona decide, esa
-  // entrada muestra la URL de la pantalla actual (replaceState). Al decidir recupera la suya y, si
-  // canceló un Atrás o un Adelante, se vuelve a la entrada de la pantalla (history.go): el historial
-  // queda como estaba. Sin posición (un enlace, location.replace) se cancela en esa misma entrada.
+  // Rutas. La posición de cada entrada del historial sale de la Navigation API (Chrome, Edge) o, sin
+  // ella, de una serie propia en history.state ({ base, idx }): una entrada nueva sigue a la anterior
+  // y una sin posición a la que se llega recorriendo el historial (p. ej. de antes de publicar esta
+  // versión) empieza otra serie. Un cambio de hash que no hizo la app (Atrás, Adelante, un enlace)
+  // pasa por la guarda mientras haya algo que se perdería:
+  //  - Atrás o Adelante dentro de la serie: se vuelve a la entrada de la pantalla (history.go) mientras
+  //    la persona decide y, si sale, se va otra vez a la pedida. Ninguna entrada cambia.
+  //  - Sin posición comparable (un enlace, location.replace, entradas viejas): la URL de esa entrada
+  //    vuelve a la de la pantalla en el sitio (replaceState, con una marca) y al decidir recupera la suya.
   // Al cambiar de pantalla se cierra cualquier confirmación abierta (no sigue sobre otra pantalla).
   const ultimoHash = useRef(window.location.hash);
-  const esperado = useRef(null);   // hash que la propia app acaba de pedir (navegar ya preguntó)
-  const volviendo = useRef(null);  // temporizador mientras se vuelve a la entrada de la pantalla
-  const indice = useRef(0);
+  const esperado = useRef(null);   // { hash, empuja } que la propia app acaba de pedir (ya preguntó)
+  const volviendo = useRef(null);  // { resolver, timer } mientras se vuelve a la entrada de la pantalla
+  const posicion = useRef(null);   // { base, idx } de la entrada de la pantalla
+  const navPantalla = useRef(null); // navigation.currentEntry.index de la entrada de la pantalla
+  const largo = useRef(window.history.length);
   const turno = useRef(0);
   useEffect(() => {
-    const idxDe = (st) => (st && typeof st.idx === 'number' ? st.idx : null);
+    const navIdx = () => { try { const e = window.navigation && window.navigation.currentEntry; return e && e.index >= 0 ? e.index : null; } catch (e) { return null; } };
+    const posDe = (st) => (st && st.base && typeof st.idx === 'number' ? { base: st.base, idx: st.idx } : null);
+    const mismaPos = (a, b) => !!(a && b && a.base === b.base && a.idx === b.idx);
     const ponerUrl = (h, estado) => { try { window.history.replaceState(estado === undefined ? window.history.state : estado, '', h || window.location.pathname + window.location.search); } catch (e) { /* nada */ } };
-    const marcar = (idx) => ponerUrl(window.location.hash, { ...(window.history.state || {}), idx });
-    if (idxDe(window.history.state) === null) marcar(0);
-    indice.current = idxDe(window.history.state) || 0;
-    const aplicar = (nuevo) => {
-      const idx = idxDe(window.history.state);
-      if (idx === null) marcar(indice.current + 1);
-      indice.current = idx === null ? indice.current + 1 : idx;
+    const marcar = (p) => { ponerUrl(window.location.hash, { ...(window.history.state || {}), ...p }); posicion.current = p; };
+    const serieNueva = () => marcar({ base: U.idAleatorio(), idx: 0 });
+    if (posDe(window.history.state)) posicion.current = posDe(window.history.state); else serieNueva();
+    navPantalla.current = navIdx();
+    // empujada: la entrada se acaba de crear (navegar, un enlace), así que va después de la anterior.
+    const aplicar = (nuevo, empujada) => {
+      const p = posDe(window.history.state);
+      if (p) posicion.current = p;
+      else if (empujada && posicion.current) marcar({ base: posicion.current.base, idx: posicion.current.idx + 1 });
+      else serieNueva();
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
       if (nuevo === ultimoHash.current) return;
       ultimoHash.current = nuevo;
-      setConfirmacion((p) => { if (p) p.resolver(false); return null; });
+      setConfirmacion((c) => { if (c) c.resolver(false); return null; });
       setRuta(parsearRuta()); window.scrollTo({ top: 0 });
     };
-    // Si la vuelta no llega (posiciones que no cuadran) o cae en otra entrada, la URL se corrige ahí.
+    // Llegada a la entrada de la pantalla. Si no llega (posiciones que no cuadran) o cae en otra
+    // entrada, la URL se corrige ahí mismo.
     const terminarVuelta = () => {
-      clearTimeout(volviendo.current); volviendo.current = null;
+      const v = volviendo.current; volviendo.current = null;
+      if (v) clearTimeout(v.timer);
       if (window.location.hash !== ultimoHash.current) ponerUrl(ultimoHash.current);
-      const idx = idxDe(window.history.state);
-      if (idx !== null) indice.current = idx;
+      const p = posDe(window.history.state);
+      if (p) posicion.current = p;
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
+      if (v) v.resolver();
     };
+    const volver = (pasos) => new Promise((resolver) => {
+      volviendo.current = { resolver, timer: setTimeout(terminarVuelta, 1500) };
+      window.history.go(pasos);
+    });
+    const irA = (h) => { window.location.hash = h; esperado.current = { hash: window.location.hash, empuja: true }; };
     const f = async () => {
       if (volviendo.current) { terminarVuelta(); return; }
       const nuevo = window.location.hash;
-      const propio = esperado.current !== null && nuevo === esperado.current;
+      const propio = !!esperado.current && nuevo === esperado.current.hash;
+      const empujaPropio = propio && esperado.current.empuja;
       esperado.current = null;
-      if (!propio && nuevo !== ultimoHash.current && motivoSalida('navegar')) {
-        const mio = ++turno.current;
-        const idxNuevo = idxDe(window.history.state);
-        const delta = idxNuevo === null ? 0 : idxNuevo - indice.current;
-        ponerUrl(ultimoHash.current);
-        const sale = await pedirSalida('navegar');
-        if (mio !== turno.current) return;   // llegó otro cambio mientras tanto: decide ese
-        ponerUrl(nuevo);
-        if (!sale) {
-          if (delta) { volviendo.current = setTimeout(terminarVuelta, 1500); window.history.go(-delta); }
-          else ponerUrl(ultimoHash.current);
-          return;
-        }
+      const estadoDestino = window.history.state;
+      const empujada = empujaPropio || (!propio && !posDe(estadoDestino) && window.history.length > largo.current);
+      if (propio || nuevo === ultimoHash.current || !motivoSalida('navegar')) { aplicar(nuevo, empujada); return; }
+      const mio = ++turno.current;
+      const pantalla = ultimoHash.current;
+      const destino = posDe(estadoDestino);
+      const actual = posicion.current;
+      const navAntes = navPantalla.current;
+      const navDestino = navIdx();
+      const delta = navDestino !== null && navAntes !== null ? navDestino - navAntes
+        : (destino && actual && destino.base === actual.base ? destino.idx - actual.idx : 0);
+      const enPantalla = () => { const n = navIdx(); return n !== null && navAntes !== null ? n === navAntes : mismaPos(posDe(window.history.state), actual); };
+      const vuelta = delta ? volver(-delta) : null;
+      if (!delta) ponerUrl(pantalla, { ...(estadoDestino || {}), marca: mio });
+      const sale = await pedirSalida('navegar');
+      if (vuelta) await vuelta;
+      if (mio !== turno.current || ultimoHash.current !== pantalla) return;   // otro cambio decidió mientras tanto
+      if (delta) {
+        if (!sale) return;
+        if (enPantalla()) { esperado.current = { hash: nuevo, empuja: false }; window.history.go(delta); } else irA(nuevo);
+        return;
       }
-      aplicar(nuevo);
+      const st = window.history.state;
+      if (!st || st.marca !== mio) {   // con el diálogo abierto pasó a otra entrada con la misma URL
+        if (sale) irA(nuevo); else if (window.location.hash !== pantalla) ponerUrl(pantalla);
+        return;
+      }
+      ponerUrl(nuevo, estadoDestino);   // la entrada recupera su URL y su estado
+      if (sale) { aplicar(nuevo, empujada); return; }
+      // Cancelado en el sitio: esta entrada pasa a ser la de la pantalla.
+      ponerUrl(pantalla);
+      if (empujada && actual) marcar({ base: actual.base, idx: actual.idx + 1 }); else serieNueva();
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
     };
     window.addEventListener('hashchange', f);
-    return () => { window.removeEventListener('hashchange', f); clearTimeout(volviendo.current); };
+    return () => { window.removeEventListener('hashchange', f); if (volviendo.current) clearTimeout(volviendo.current.timer); };
   }, [pedirSalida]);
   const navegar = useCallback(async (hash) => {
     if (!(await pedirSalida('navegar'))) return;
@@ -192,7 +235,7 @@ const App = () => {
     window.location.hash = hash;
     // Se compara con lo que quedó en la barra (ya codificado), que es lo que llega en hashchange.
     if (window.location.hash === antes) { setRuta(parsearRuta()); return; }
-    esperado.current = window.location.hash;
+    esperado.current = { hash: window.location.hash, empuja: true };
   }, [pedirSalida]);
 
   // Tema

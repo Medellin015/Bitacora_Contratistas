@@ -667,6 +667,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   capituloRef.current = capituloId;
   const guardadasRef = useRef(respuestas);   // las últimas respuestas mandadas a guardar
   const pendienteRef = useRef(null);         // guardado programado que aún no se hace
+  const enCursoRef = useRef(null);           // promesa del guardado que se está haciendo
   const temporizadorRef = useRef(null);
   const enviandoRef = useRef(false);
   const primera = useRef(true);
@@ -674,10 +675,14 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     if (primera.current) { primera.current = false; return undefined; }
     if (!guardarRef.current || soloLectura) return undefined;
     const guardar = () => {
-      if (enviandoRef.current || pendienteRef.current !== guardar) return undefined;
+      if (enviandoRef.current || pendienteRef.current !== guardar || !guardarRef.current) return undefined;
       pendienteRef.current = null;
       guardadasRef.current = respuestas;
-      return guardarRef.current(respuestas, capituloRef.current);
+      const p = Promise.resolve(guardarRef.current(respuestas, capituloRef.current));
+      enCursoRef.current = p;
+      const fin = () => { if (enCursoRef.current === p) enCursoRef.current = null; };
+      p.then(fin, fin);
+      return p;
     };
     pendienteRef.current = guardar;
     temporizadorRef.current = setTimeout(guardar, ahoraRef.current ? 0 : 3000);
@@ -688,8 +693,16 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   useEffect(() => {
     if (!controlRef) return undefined;
     controlRef.current = {
-      pendiente: () => !!pendienteRef.current,
-      vaciar: () => { const g = pendienteRef.current; if (!g) return Promise.resolve(); clearTimeout(temporizadorRef.current); return Promise.resolve(g()); },
+      // Algo por guardar o guardándose (mientras se envía no: el envío borra el borrador).
+      pendiente: () => !enviandoRef.current && (!!pendienteRef.current || !!enCursoRef.current),
+      // Guarda ya lo programado y espera también lo que ya se estaba guardando.
+      vaciar: () => {
+        const enCurso = enCursoRef.current;
+        const g = pendienteRef.current;
+        if (g) clearTimeout(temporizadorRef.current);
+        const ahora = g ? g() : null;
+        return Promise.all([enCurso, ahora].map((x) => Promise.resolve(x).catch(() => null)));
+      },
     };
     return () => { controlRef.current = null; };
   }, []); // eslint-disable-line
@@ -799,6 +812,10 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     if (Object.keys(subidas).length) { app.avisar('alerta', 'Espera a que terminen de subir los archivos'); return; }
     setIntentoEnvio(true);
     if (Object.keys(errores).length) { app.avisar('alerta', `Hay ${Object.keys(errores).length} ${U.plural(Object.keys(errores).length, 'campo por corregir', 'campos por corregir')}`); irAPrimerError(); return; }
+    // Lo pendiente se guarda antes de confirmar: si la pestaña se cierra con el diálogo abierto, no se
+    // pierde (y si se envía, el envío borra después ese borrador).
+    clearTimeout(temporizadorRef.current);
+    if (pendienteRef.current) pendienteRef.current();
     setEnviando(true);
     enviandoRef.current = true;
     let enviado = false;

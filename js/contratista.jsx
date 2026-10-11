@@ -600,10 +600,12 @@ const PaginaFormulario = () => {
   const { datos, cargando, error } = useCarga(async () => {
     if (!formulario) return null;
     const uid = app.usuario.id;
-    const envio = envioId ? await DB.obtenerEnvio(envioId) : null;
+    // Con las reglas, leer un documento que no existe (o ajeno) da «permiso denegado»: se trata como que falta.
+    const sinPermisoEsNulo = (e) => { if (e && e.code === 'permission-denied') return null; throw e; };
+    const envio = envioId ? await DB.obtenerEnvio(envioId).catch(sinPermisoEsNulo) : null;
     if (envioId && !envio) return { falta: 'envio' };
     // Corrección o consulta: el contrato es el del envío, no el elegido en la barra.
-    const contrato = envio ? (app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId)) : contratoBarra;
+    const contrato = envio ? (app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId).catch(sinPermisoEsNulo)) : contratoBarra;
     if (!contrato) return envio ? { falta: 'contrato' } : null;
     const periodo = envio ? envio.periodo : app.periodo;
     // El admin diligencia en nombre del contratista: los datos del Word salen del perfil del contratista, no del suyo.
@@ -615,7 +617,7 @@ const PaginaFormulario = () => {
     }
     const idBorrador = DB.idBorrador(uid, contrato.id, formulario.id, periodo);
     const [borrador, contador, lista] = await Promise.all([
-      modo === 'nuevo' ? DB.obtenerBorrador(idBorrador).catch(() => null) : Promise.resolve(null),
+      modo === 'nuevo' ? DB.obtenerBorrador(idBorrador).catch(() => undefined) : Promise.resolve(null),   // undefined: no se pudo leer
       DB.obtenerContador(contrato.id, formulario.id).catch(() => null),
       DB.listarEnvios({ rol: app.rol, uid, contratoId: contrato.id, formularioId: formulario.id }),
     ]);
@@ -626,10 +628,12 @@ const PaginaFormulario = () => {
     try { local = JSON.parse(localStorage.getItem(`bitacora.borrador.${idBorrador}`) || 'null'); } catch (e) { local = null; }
     if (local && local.respuestas) local = { ...local, actualizadoEn: new Date(local.actualizadoEn || Date.now()) };
     else local = null;
+    // Una copia ya confirmada que el servidor no tiene: el borrador se descartó o se envió en otro lado.
+    if (local && borrador === null && local.pendiente === false) { try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ } local = null; }
     // La copia local gana si no llegó al servidor (p. ej. se cerró la pestaña o la sesión antes) y es más nueva.
     const fechaServidor = borrador && borrador.actualizadoEn ? new Date(borrador.actualizadoEn).getTime() : 0;
     const usarLocal = local && (!borrador || (local.pendiente && local.actualizadoEn.getTime() > fechaServidor));
-    return { envio, contrato, periodo, idBorrador, contratoId: contrato.id, formularioIdBorrador: formulario.id, borrador: usarLocal ? { ...local, soloLocal: true } : borrador, contador, enviosPeriodo, ultimo, usuarioFormulario };
+    return { envio, contrato, periodo, idBorrador, contratoId: contrato.id, formularioIdBorrador: formulario.id, borrador: usarLocal ? { ...local, soloLocal: true } : (borrador || null), contador, enviosPeriodo, ultimo, usuarioFormulario };
   }, [formularioId, envioId ? '' : contratoBarra && contratoBarra.id, modo, envioId, envioId ? '' : app.periodo]);
 
   if (!formulario) return <Vacio icono="formulario" titulo="Formulario no encontrado" accion={<Boton onClick={() => app.navegar('#/inicio')}>Volver al inicio</Boton>} />;
@@ -638,7 +642,7 @@ const PaginaFormulario = () => {
   if (error) return <Alerta tipo="error">{DB.traducirError(error)}</Alerta>;
   if (!datos) return <Vacio icono="contrato" titulo="Elige un contrato" texto="Selecciona el contrato en la barra superior." />;
   if (datos.falta === 'envio') return <Alerta tipo="error">El envío no existe o ya no tienes acceso a él.</Alerta>;
-  if (datos.falta === 'contrato') return <Alerta tipo="error">El contrato de este envío ya no existe, así que no se puede abrir aquí. Si necesitas corregirlo, habla con el administrador.</Alerta>;
+  if (datos.falta === 'contrato') return <Alerta tipo="error">El contrato de este envío ya no existe o ya no tienes acceso a él, así que no se puede abrir aquí. Si necesitas corregirlo, habla con el administrador.</Alerta>;
   const { envio, periodo, idBorrador, contratoId, formularioIdBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
   // El contrato al día (p. ej. tras «Actualizar datos»), del mismo id que el cargado.
   const contrato = app.contratos.find((c) => c.id === contratoId) || datos.contrato;
@@ -653,33 +657,6 @@ const PaginaFormulario = () => {
   const ventanaOk = !requiereVentana(formulario) || U.estadoVentana(app.ventana, formulario.id, ahora).estado === 'abierta';
   const limite = limiteDe(formulario);
 
-  // Bloqueos previos (también se validan en las reglas).
-  if (esCorreccion && (!envio || !correccionVigente(envio, ahora))) return <Alerta tipo="alerta">Este envío no está en corrección o el plazo venció. Pide un nuevo plazo desde Solicitudes.</Alerta>;
-  if (esLectura && !envio) return <Alerta tipo="error">El envío no existe.</Alerta>;
-  if (!esCorreccion && !esLectura) {
-    if (!ventanaOk) return <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(periodo)} no está abierta</strong> para {formulario.nombre}. Fuera de ventana solo se consulta; las correcciones van por Solicitudes.</Alerta>;
-    if (limite != null && enviosPeriodo.length >= limite) return <Alerta tipo="info"><strong>Ya enviaste {formulario.nombre} de {U.nombrePeriodo(periodo)}.</strong> Puedes verlo en Mis envíos; si necesitas cambiarlo, crea una solicitud de corrección. <div className="mt-2 flex gap-2"><Boton tam="sm" onClick={() => app.navegar('#/envios')}>Mis envíos</Boton><Boton tam="sm" onClick={() => app.navegar('#/solicitudes')}>Solicitudes</Boton></div></Alerta>;
-    if (!rango) return <Alerta tipo="alerta">El período {U.nombrePeriodo(periodo)} está fuera de las fechas del contrato.</Alerta>;
-    if (borrador && decisionBorrador === null) {
-      return (
-        <Modal titulo="Tienes un borrador guardado" descripcion={`Guardado ${U.tiempoRelativo(borrador.actualizadoEn)}${borrador.soloLocal ? ' (solo en este dispositivo)' : ''}`} onCerrar={() => app.navegar('#/inicio')}
-          pie={<><Boton icono="basura" onClick={async () => { try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* no existía */ } try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ } setDecisionBorrador('nuevo'); }}>Empezar de nuevo</Boton><Boton variante="primario" icono="editar" onClick={() => setDecisionBorrador('continuar')}>Continuar borrador</Boton></>}>
-          <p className="text-sm texto-2">Puedes continuar donde ibas o descartar el borrador y empezar con los valores por defecto.</p>
-        </Modal>
-      );
-    }
-  }
-  const consecutivoSugerido = (contador ? Number(contador.ultimo) || 0 : 0) + 1;
-  const ctx = { usuario: usuarioFormulario, contrato, parametros: app.parametros, catalogos: app.catalogos, periodo: rango || U.rangoPeriodo(periodo), consecutivo: consecutivoSugerido };
-  const respuestasIniciales = esCorreccion || esLectura ? envio.respuestas : (decisionBorrador === 'continuar' && borrador ? borrador.respuestas : null);
-  const puedeEditar = (qx) => {
-    if (esLectura) return false;
-    if (qx.soloRevisor) return false;
-    if (esCorreccion && qx.editableEnCorreccion === false) return false;
-    // El consecutivo solo se edita antes del primer envío del contrato (regla: nunca ≤ al último).
-    if (qx.porDefecto === 'consecutivo' && contador) return false;
-    return true;
-  };
   const guardarBorrador = async (respuestas, capituloActual) => {
     if (esLectura) return;
     // Con el contrato y el formulario del id del borrador (no los de pantalla, que pueden haber cambiado).
@@ -695,6 +672,33 @@ const PaginaFormulario = () => {
       try { if ((JSON.parse(localStorage.getItem(clave) || 'null') || {}).actualizadoEn === local.actualizadoEn) localStorage.setItem(clave, JSON.stringify({ ...local, pendiente: false })); } catch (e) { /* nada */ }
       if (montado.current) setEstadoGuardado({ fecha: new Date(), guardando: false, error: null });
     } catch (e) { if (montado.current) setEstadoGuardado({ fecha: null, guardando: false, error: 'no se guardó en el servidor (queda copia local)' }); }
+  };
+  // Bloqueos previos (también se validan en las reglas).
+  if (esCorreccion && (!envio || !correccionVigente(envio, ahora))) return <Alerta tipo="alerta">Este envío no está en corrección o el plazo venció. Pide un nuevo plazo desde Solicitudes.</Alerta>;
+  if (esLectura && !envio) return <Alerta tipo="error">El envío no existe.</Alerta>;
+  if (!esCorreccion && !esLectura) {
+    if (!ventanaOk) return <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(periodo)} no está abierta</strong> para {formulario.nombre}. Fuera de ventana solo se consulta; las correcciones van por Solicitudes.</Alerta>;
+    if (limite != null && enviosPeriodo.length >= limite) return <Alerta tipo="info"><strong>Ya enviaste {formulario.nombre} de {U.nombrePeriodo(periodo)}.</strong> Puedes verlo en Mis envíos; si necesitas cambiarlo, crea una solicitud de corrección. <div className="mt-2 flex gap-2"><Boton tam="sm" onClick={() => app.navegar('#/envios')}>Mis envíos</Boton><Boton tam="sm" onClick={() => app.navegar('#/solicitudes')}>Solicitudes</Boton></div></Alerta>;
+    if (!rango) return <Alerta tipo="alerta">El período {U.nombrePeriodo(periodo)} está fuera de las fechas del contrato.</Alerta>;
+    if (borrador && decisionBorrador === null) {
+      return (
+        <Modal titulo="Tienes un borrador guardado" descripcion={`Guardado ${U.tiempoRelativo(borrador.actualizadoEn)}${borrador.soloLocal ? ' (solo en este dispositivo)' : ''}`} onCerrar={() => app.navegar('#/inicio')}
+          pie={<><Boton icono="basura" onClick={async () => { try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* no existía */ } try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ } setDecisionBorrador('nuevo'); }}>Empezar de nuevo</Boton><Boton variante="primario" icono="editar" onClick={() => { if (borrador.soloLocal) guardarBorrador(borrador.respuestas, borrador.capituloActual); setDecisionBorrador('continuar'); }}>Continuar borrador</Boton></>}>
+          <p className="text-sm texto-2">Puedes continuar donde ibas o descartar el borrador y empezar con los valores por defecto.</p>
+        </Modal>
+      );
+    }
+  }
+  const consecutivoSugerido = (contador ? Number(contador.ultimo) || 0 : 0) + 1;
+  const ctx = { usuario: usuarioFormulario, contrato, parametros: app.parametros, catalogos: app.catalogos, periodo: rango || U.rangoPeriodo(periodo), consecutivo: consecutivoSugerido };
+  const respuestasIniciales = esCorreccion || esLectura ? envio.respuestas : (decisionBorrador === 'continuar' && borrador ? borrador.respuestas : null);
+  const puedeEditar = (qx) => {
+    if (esLectura) return false;
+    if (qx.soloRevisor) return false;
+    if (esCorreccion && qx.editableEnCorreccion === false) return false;
+    // El consecutivo solo se edita antes del primer envío del contrato (regla: nunca ≤ al último).
+    if (qx.porDefecto === 'consecutivo' && contador) return false;
+    return true;
   };
   const subir = async (archivo, pregunta) => {
     // El flujo lee el borrador (dueño, contrato, formulario y período) para ubicar el archivo: se
