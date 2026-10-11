@@ -28,8 +28,10 @@
     pagina: { ancho: 12240, alto: 15840 },             // Carta
     margenes: { top: 1702, right: 1701, bottom: 1134, left: 1701, header: 708, footer: 708 },
     tablaPrincipal: { ancho: 10532, sangria: -431, columnas: [3409, 1241, 5882], margenCelda: 70 },
-    tablaUnaColumna: { ancho: 9782, sangria: -431 },
-    tablaDosColumnas: { ancho: 9209, columnas: [3964, 5245] },
+    // Margen de celda explícito (el «normal» de Word, 0,19 cm): sin él Word deja el texto
+    // pegado al borde, y con sangría negativa le cortaba la primera letra.
+    tablaUnaColumna: { ancho: 9782, sangria: -431, margenCelda: 108 },
+    tablaDosColumnas: { ancho: 9209, columnas: [3964, 5245], margenCelda: 108 },
     colorHipervinculo: '0563C1',
     encabezado: { anchoEmu: 7740638, altoEmu: 775992, offsetXEmu: -1264920, offsetYEmu: -282575 },
     pie: { anchoEmu: 7808997, altoEmu: 1317404, offsetYEmu: 477429,
@@ -72,6 +74,11 @@
   // exactamente los EMU del modelo (redondear a px entero los corre unos EMU).
   const pxDeEmu = (emu) => emu / EMU_POR_PX;
   const REGEX_URL = /(https?:\/\/[^\s<>"«»]+)/g;
+  // XML 1.0 no admite caracteres de control (salvo tabulador y saltos de línea) ni sustitutos sueltos:
+  // pegados desde otro programa dejaban el Word sin poder abrirse. El salto manual (\v) y el de
+  // página (\f) se vuelven espacio (en párrafos, cambio de línea).
+  const NO_XML = /[\u0000-\u0008\u000E-\u001F\uFFFE\uFFFF\uD800-\uDFFF]/gu;
+  const textoXml = (s) => String(s == null ? '' : s).replace(/[\u000B\u000C]/g, ' ').replace(NO_XML, '');
 
   /* ===== 3. Bloques reutilizables ===== */
   function crearBloques(D, F) {
@@ -83,7 +90,7 @@
     const bordesTabla = { ...bordes, insideHorizontal: borde, insideVertical: borde };
 
     const run = (text, o = {}) => new TextRun({
-      text, font: F.fuente, size: o.size || F.tamValor, bold: !!o.bold,
+      text: textoXml(text), font: F.fuente, size: o.size || F.tamValor, bold: !!o.bold,
     });
 
     // Una línea de texto → runs; las URL se vuelven hipervínculos azules subrayados.
@@ -91,8 +98,8 @@
       const partes = String(linea).split(REGEX_URL).filter((p) => p !== '');
       return partes.map((p) => (/^https?:\/\//.test(p)
         ? new ExternalHyperlink({
-          link: p,
-          children: [new TextRun({ text: p, font: F.fuente, size: o.size || F.tamValor,
+          link: textoXml(p),
+          children: [new TextRun({ text: textoXml(p), font: F.fuente, size: o.size || F.tamValor,
             color: F.colorHipervinculo, underline: {} })],
         })
         : run(p, o)));
@@ -101,7 +108,7 @@
     // Texto multilínea → un párrafo por línea (así está en el modelo). Las
     // líneas que son solo una URL van sin justificar, como en el modelo.
     const parrafos = (texto, o = {}) => {
-      const lineas = String(texto || '').split(/\r?\n/).filter((l) => l.trim() !== '');
+      const lineas = String(texto || '').split(/\r?\n|[\u000B\u000C]/).filter((l) => l.trim() !== '');
       if (!lineas.length) lineas.push('');
       return lineas.map((l) => new Paragraph({
         alignment: /^\s*https?:\/\/\S+\s*$/.test(l) ? AlignmentType.LEFT : (o.alignment || AlignmentType.LEFT),
@@ -247,6 +254,7 @@
       columnWidths: [TU.ancho],
       indent: { size: TU.sangria, type: WidthType.DXA },
       layout: TableLayoutType.FIXED,
+      margins: { left: TU.margenCelda, right: TU.margenCelda },
       borders: B.bordesTabla,
       rows: [
         fila([B.celda([etiqueta(titulo, { alignment: AlignmentType.CENTER })], { width: TU.ancho, blanco: true, verticalAlign: null })]),
@@ -259,24 +267,26 @@
     // (keepNext en cada párrafo + filas que no se dividen).
     const T2 = F.tablaDosColumnas;
     const [k0, k1] = T2.columnas;
-    const sangria = { left: -80 };
+    // El modelo traía sangría -80 compensada por el margen de celda por defecto; con margen
+    // explícito no hace falta (y en Word sin margen cortaba la primera letra).
+    const margenes2 = { left: T2.margenCelda, right: T2.margenCelda };
     const filaFirma = (lbl, contenido, alto) => new TableRow({
       cantSplit: true,
       height: { value: alto, rule: HeightRule.ATLEAST },
       children: [
-        B.celda([new Paragraph({ alignment: AlignmentType.JUSTIFIED, indent: sangria, keepNext: true,
+        B.celda([new Paragraph({ alignment: AlignmentType.JUSTIFIED, keepNext: true,
           children: [B.run(lbl, { bold: true, size: F.tamEtiqueta })] })], { width: k0 }),
         B.celda(contenido, { width: k1 }),
       ],
     });
     const firmaImg = (() => {
-      if (!imagenes.firma) return [new Paragraph({ indent: sangria, keepNext: true, children: [] })];
+      if (!imagenes.firma) return [new Paragraph({ keepNext: true, children: [] })];
       // Mantiene la proporción dentro del recuadro máximo del modelo.
       const { anchoMaxEmu, altoMaxEmu } = F.firma;
       const ratio = imagenes.firmaAncho && imagenes.firmaAlto ? imagenes.firmaAncho / imagenes.firmaAlto : anchoMaxEmu / altoMaxEmu;
       let w = anchoMaxEmu, h = w / ratio;
       if (h > altoMaxEmu) { h = altoMaxEmu; w = h * ratio; }
-      return [new Paragraph({ indent: sangria, keepNext: true, children: [new ImageRun({
+      return [new Paragraph({ keepNext: true, children: [new ImageRun({
         type: imagenes.tipoFirma || 'png', data: imagenes.firma,
         transformation: { width: pxDeEmu(w), height: pxDeEmu(h) },
       })] })];
@@ -286,12 +296,13 @@
       columnWidths: T2.columnas,
       alignment: AlignmentType.CENTER,
       layout: TableLayoutType.FIXED,
+      margins: margenes2,
       borders: B.bordesTabla,
       rows: [
-        filaFirma('Nombres y apellidos Contratista', [new Paragraph({ indent: sangria, keepNext: true, children: [B.run(String(d.contratista.nombreCompleto).toUpperCase())] })], 351),
-        filaFirma('Rol en el proceso', [new Paragraph({ indent: sangria, keepNext: true, alignment: AlignmentType.JUSTIFIED, children: [B.run(d.contratista.rol || '')] })], 408),
+        filaFirma('Nombres y apellidos Contratista', [new Paragraph({ keepNext: true, children: [B.run(String(d.contratista.nombreCompleto).toUpperCase())] })], 351),
+        filaFirma('Rol en el proceso', [new Paragraph({ keepNext: true, alignment: AlignmentType.JUSTIFIED, children: [B.run(d.contratista.rol || '')] })], 408),
         filaFirma('Firma del contratista', firmaImg, 408),
-        filaFirma('Nombre y Apellidos del validador', [new Paragraph({ indent: sangria, keepNext: true, children: [B.run(d.contrato.validador || '', { bold: true, size: F.tamEtiqueta })] })], 408),
+        filaFirma('Nombre y Apellidos del validador', [new Paragraph({ keepNext: true, children: [B.run(d.contrato.validador || '', { bold: true, size: F.tamEtiqueta })] })], 408),
         // En el modelo la etiqueta Vo.Bo. va entre dos párrafos vacíos: deja
         // la fila alta para la firma manuscrita del validador.
         new TableRow({
@@ -299,9 +310,9 @@
           height: { value: 460, rule: HeightRule.ATLEAST },
           children: [
             B.celda([
-              new Paragraph({ indent: sangria, children: [B.run('', { size: F.tamEtiqueta })] }),
-              etiqueta('Vo.Bo. VALIDADOR', { alignment: AlignmentType.JUSTIFIED, indent: sangria }),
-              new Paragraph({ indent: sangria, children: [B.run('', { size: F.tamEtiqueta })] }),
+              new Paragraph({ children: [B.run('', { size: F.tamEtiqueta })] }),
+              etiqueta('Vo.Bo. VALIDADOR', { alignment: AlignmentType.JUSTIFIED }),
+              new Paragraph({ children: [B.run('', { size: F.tamEtiqueta })] }),
             ], { width: k0 }),
             B.celda([new Paragraph({ children: d.voBoTexto ? [B.run(d.voBoTexto)] : [] })], { width: k1 }),
           ],
@@ -310,24 +321,35 @@
     });
 
     // 5.4 Tabla de anexos
-    const filasAnexos = (d.anexos || []).map((x, i) => fila([
-      B.celda([new Paragraph({ indent: sangria, children: [B.run(`${i + 1}. ${x.nombre}`)] })], { width: k0 }),
-      B.celda([
-        new Paragraph({ indent: sangria, children: [B.run(x.ruta || '')] }),
-        ...(x.url ? [new Paragraph({ indent: sangria, children: B.runsConEnlaces(x.url) })] : []),
-      ], { width: k1 }),
-    ], 408));
+    // Ninguna fila se parte entre páginas y el encabezado no queda solo: se repite y va con la primera.
+    const filasAnexos = (d.anexos || []).map((x, i) => new TableRow({
+      cantSplit: true,
+      height: { value: 408, rule: HeightRule.ATLEAST },
+      children: [
+        B.celda([new Paragraph({ children: [B.run(`${i + 1}. ${x.nombre}`)] })], { width: k0 }),
+        B.celda([
+          new Paragraph({ children: [B.run(x.ruta || '')] }),
+          ...(x.url ? [new Paragraph({ children: B.runsConEnlaces(x.url) })] : []),
+        ], { width: k1 }),
+      ],
+    }));
     const tablaAnexos = new Table({
       width: { size: T2.ancho, type: WidthType.DXA },
       columnWidths: T2.columnas,
       alignment: AlignmentType.CENTER,
       layout: TableLayoutType.FIXED,
+      margins: margenes2,
       borders: B.bordesTabla,
       rows: [
-        fila([
-          B.celda([new Paragraph({ indent: sangria, children: [B.run('Anexo', { bold: true })] })], { width: k0 }),
-          B.celda([new Paragraph({ indent: sangria, children: [B.run('Ruta', { bold: true })] })], { width: k1 }),
-        ], 408),
+        new TableRow({
+          tableHeader: true,
+          cantSplit: true,
+          height: { value: 408, rule: HeightRule.ATLEAST },
+          children: [
+            B.celda([new Paragraph({ keepNext: true, children: [B.run('Anexo', { bold: true })] })], { width: k0 }),
+            B.celda([new Paragraph({ keepNext: true, children: [B.run('Ruta', { bold: true })] })], { width: k1 }),
+          ],
+        }),
         ...filasAnexos,
       ],
     });
@@ -358,7 +380,7 @@
     const espacio = () => new Paragraph({ children: [B.run('', { size: F.tamEtiqueta })] });
 
     return new Document({
-      creator: d.contratista.nombreCompleto,
+      creator: textoXml(d.contratista.nombreCompleto),
       title: `Informe mensual No. ${d.numeroInforme}`,
       description: `Informe de ejecución mensual — ${textoPeriodo(d.periodo.desde, d.periodo.hasta)}`,
       styles: {
@@ -414,7 +436,7 @@
   const bloques = (D = raiz.docx, formato = {}) => crearBloques(D, { ...FORMATO_DEFAULT, ...formato });
 
   const api = { construirInformeDocx, nombreArchivoInforme, fechaLarga, textoPeriodo,
-    encabezadoPie, bloques, FORMATO_DEFAULT };
+    encabezadoPie, bloques, textoXml, FORMATO_DEFAULT };
   raiz.InformeDocx = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

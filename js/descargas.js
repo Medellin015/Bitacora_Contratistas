@@ -118,6 +118,26 @@
   /* ===== 3. Informe mensual ===== */
   const info = (contrato, cap, campo) => { const v = contrato && contrato.info && contrato.info[cap] && contrato.info[cap][campo]; return v == null ? '' : v; };
   const preguntaInfo = (catalogos, origen) => ({ origenOpciones: origen });
+  // Anexos del Word: primero la evidencia de cada actividad ejecutada («Actividad N: …», con la
+  // ruta NAS y el enlace o archivo), luego los anexos adicionales. Envíos sin evidencia por
+  // actividad (plantilla anterior) dan lo mismo que antes.
+  const anexosInforme = (R, rutaNas) => {
+    const urlArchivo = (lista) => (Array.isArray(lista) && lista[0] && lista[0].url) || '';
+    const nombreArchivo = (lista) => (Array.isArray(lista) && lista[0] && lista[0].nombre) || '';
+    const evidencias = (Array.isArray(R.actividades) ? R.actividades : [])
+      .map((a, i) => {
+        const url = [urlArchivo(a.evidenciaArchivo), String(a.evidenciaUrl || '').trim()].filter(Boolean).join(' ');
+        // Sin texto (p. ej. solo espacios) pero con archivo o enlace, la fila no se pierde.
+        const texto = String(a.evidencia || '').trim() || (url ? nombreArchivo(a.evidenciaArchivo) || 'Evidencia' : '');
+        return { a, texto, url, numero: a.numero != null && a.numero !== '' ? Number(a.numero) : i + 1 };
+      })
+      .filter(({ a, texto }) => Number(a.porcentaje) !== 0 && texto)
+      .map(({ texto, url, numero }) => ({ nombre: `Actividad ${numero}: ${texto}`, ruta: rutaNas, url }));
+    return evidencias.concat((Array.isArray(R.anexos) ? R.anexos : []).map((x) => ({
+      nombre: x.nombre || '', ruta: x.ruta || rutaNas,
+      url: x.url || urlArchivo(x.archivo),
+    })));
+  };
   // Correspondencia exacta de §9.3. Lo arma el cliente al enviar; el revisor lo regenera y compara.
   const armarDatosInforme = ({ respuestas, contrato, usuario, catalogos, parametros, voBoTexto = '' }) => {
     const R = respuestas || {};
@@ -143,10 +163,7 @@
       })),
       dificultades: String(R.dificultades || ''),
       observaciones: String(R.observaciones || ''),
-      anexos: (Array.isArray(R.anexos) ? R.anexos : []).map((x) => ({
-        nombre: x.nombre || '', ruta: x.ruta || rutaNas,
-        url: x.url || ((Array.isArray(x.archivo) && x.archivo[0] && x.archivo[0].url) || ''),
-      })),
+      anexos: anexosInforme(R, rutaNas),
       voBoTexto: voBoTexto || '',
     };
   };
@@ -225,7 +242,7 @@
     });
     const tablaAportes = new Table({
       width: { size: 9782, type: WidthType.DXA }, columnWidths: anchos, indent: { size: F.tablaUnaColumna.sangria, type: WidthType.DXA },
-      layout: TableLayoutType.FIXED, borders: B.bordesTabla, rows: [encabezadoTabla, ...filasT],
+      layout: TableLayoutType.FIXED, margins: { left: 57, right: 57 }, borders: B.bordesTabla, rows: [encabezadoTabla, ...filasT],
     });
     const img = imagenesCon(firma);
     const firmaParrafo = img.firma ? (() => {
@@ -235,7 +252,7 @@
       return new Paragraph({ children: [new ImageRun({ type: 'png', data: img.firma, transformation: { width: w / 9525, height: h / 9525 } })] });
     })() : vacio();
     const doc = new Document({
-      creator: d.contratista.nombreCompleto, title: `Cuenta de cobro No. ${d.numero}`,
+      creator: raiz.InformeDocx.textoXml(d.contratista.nombreCompleto), title: `Cuenta de cobro No. ${d.numero}`,
       styles: { default: { document: { run: { font: F.fuente, size: F.tamValor }, paragraph: { spacing: { before: 0, after: 0, line: 240, lineRule: D.LineRuleType.AUTO } } } } },
       sections: [{
         properties: { page: { size: { width: F.pagina.ancho, height: F.pagina.alto }, margin: F.margenes } },
@@ -285,7 +302,7 @@
       B.celda([new Paragraph({ children: [B.run(a, { bold: true, size: F.tamEtiqueta })] })], { width: 3400 }),
       B.celda(negrita ? [new Paragraph({ children: [B.run(b, { bold: true })] })] : B.parrafos(b, { alignment: AlignmentType.JUSTIFIED }), { width: ANCHO - 3400 }),
     ] });
-    const tabla = (filas, anchos) => new Table({ width: { size: ANCHO, type: WidthType.DXA }, columnWidths: anchos, indent: { size: SANGRIA, type: WidthType.DXA }, layout: TableLayoutType.FIXED, borders: B.bordesTabla, rows: filas });
+    const tabla = (filas, anchos) => new Table({ width: { size: ANCHO, type: WidthType.DXA }, columnWidths: anchos, indent: { size: SANGRIA, type: WidthType.DXA }, layout: TableLayoutType.FIXED, margins: { left: F.tablaUnaColumna.margenCelda, right: F.tablaUnaColumna.margenCelda }, borders: B.bordesTabla, rows: filas });
     const hijos = [
       new Paragraph({ alignment: AlignmentType.CENTER, children: [B.run(titulo, { bold: true, size: 26 })] }),
       new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: [B.run(subtitulo || '')] }),
@@ -315,7 +332,7 @@
       if (filas.length) hijos.push(tabla(filas, [3400, ANCHO - 3400]));
     });
     const doc = new Document({
-      title: titulo,
+      title: I.textoXml(titulo),
       styles: { default: { document: { run: { font: F.fuente, size: F.tamValor }, paragraph: { spacing: { before: 0, after: 0, line: 240, lineRule: D.LineRuleType.AUTO } } } } },
       sections: [{ properties: { page: { size: { width: F.pagina.ancho, height: F.pagina.alto }, margin: F.margenes } }, headers: { default: header }, footers: { default: footer }, children: hijos }],
     });
@@ -335,7 +352,7 @@
     if (formulario.tipo === 'INFORME_MENSUAL') {
       const acts = Array.isArray(R.actividades) ? R.actividades : [];
       const prom = acts.length ? acts.reduce((s, a) => s + (Number(a.porcentaje) || 0), 0) / acts.length : 0;
-      return { actividades: acts.length, promedioEjecucion: U.redondear(prom, 1), anexos: (Array.isArray(R.anexos) ? R.anexos : []).length };
+      return { actividades: acts.length, promedioEjecucion: U.redondear(prom, 1), anexos: anexosInforme(R, '').length };
     }
     return {};
   };

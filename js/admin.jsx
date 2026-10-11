@@ -752,7 +752,7 @@ const PaginaAdminParametros = () => {
           <Alerta tipo="alerta" className="md:col-span-2"><strong>Decisiones pendientes con la entidad (no las toma la app):</strong> Fondo de Solidaridad Pensional (IBC ≥ 4 SMMLV: la referencia no lo calcula), redondeo de la PILA (aquí los aportes se muestran con el cálculo exacto redondeado a pesos en el Word) y vigencia anual del SMMLV y de los porcentajes.</Alerta>
         </SeccionParametros>
         <SeccionParametros titulo="Flujos de Power Automate" ayuda="URL del disparador «Cuando se recibe una solicitud HTTP». Vacío = la función queda deshabilitada con aviso.">
-          <Campo etiqueta="subirArchivo (SharePoint)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.subirArchivo) || ''} onChange={txt('flujos.subirArchivo')} placeholder="https://prod-xx.westus.logic.azure.com:443/workflows/…" /></Campo>
+          <Campo etiqueta="subirArchivo (OneDrive o SharePoint)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.subirArchivo) || ''} onChange={txt('flujos.subirArchivo')} placeholder="https://….environment.api.powerplatform.com/powerautomate/automations/direct/workflows/…" /></Campo>
           <Campo etiqueta="notificar (correos Outlook)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.notificar) || ''} onChange={txt('flujos.notificar')} /></Campo>
           <Campo etiqueta="docxAPdf (opcional)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.docxAPdf) || ''} onChange={txt('flujos.docxAPdf')} /></Campo>
         </SeccionParametros>

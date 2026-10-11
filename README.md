@@ -25,6 +25,7 @@ los tokens de tema, componentes y animaciones.
 | `firestore.rules` | Reglas de seguridad de Firestore por rol. |
 | `firestore.indexes.json` | Índices compuestos que necesitan las consultas de envíos y solicitudes. |
 | `firebase.json` | Configuración para publicar reglas e índices con la CLI de Firebase. |
+| `docs/flujos.md` | Contrato y paso a paso de los flujos de Power Automate (`subirArchivo`, `notificar`, `docxAPdf`). |
 
 Los `.jsx` comparten el ámbito global (constantes de primer nivel), por eso el
 orden de carga importa y ningún nombre puede repetirse entre archivos. La
@@ -63,7 +64,8 @@ bloquea `gstatic.com`), también abre en demostración y lo avisa en el banner.
 5. Pega la configuración web del proyecto en `js/firebase-config.js`.
 6. Entra como administrador, verifica el correo y usa **Sembrar** en el inicio.
    Luego completa **Parámetros** (NIT, SMMLV, URL de los flujos de Power
-   Automate), los **contratos** y las **Ventanas** del período.
+   Automate: ver [docs/flujos.md](docs/flujos.md)), los **contratos** y las
+   **Ventanas** del período.
 
 Cada vez que cambie `firestore.rules` hay que volver a publicarlas
 (`firebase deploy --only firestore:rules`, o pegarlas en Firestore → Reglas).

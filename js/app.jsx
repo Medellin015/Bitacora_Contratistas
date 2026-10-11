@@ -102,18 +102,141 @@ const App = () => {
   const [ruta, setRuta] = useState(parsearRuta);
   const [demoListo, setDemoListo] = useState(!MODO_DEMO);
 
-  // Rutas
-  useEffect(() => { const f = () => { setRuta(parsearRuta()); window.scrollTo({ top: 0 }); }; window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f); }, []);
-  const navegar = useCallback((hash) => { if (window.location.hash === hash) setRuta(parsearRuta()); else window.location.hash = hash; }, []);
-
-  // Toasts y confirmaciones
+  // Toasts y confirmaciones. Una confirmación nueva cancela la que estuviera abierta (nadie queda esperando).
   const avisar = useCallback((tipo, mensaje) => {
     const id = U.idAleatorio();
     setToasts((t) => [...t.slice(-4), { id, tipo, mensaje }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tipo === 'error' ? 9000 : 5000);
   }, []);
-  const confirmar = useCallback((opciones) => new Promise((resolver) => setConfirmacion({ ...opciones, resolver })), []);
+  const confirmar = useCallback((opciones) => new Promise((resolver) => setConfirmacion((previa) => { if (previa) previa.resolver(false); return { ...opciones, resolver, clave: U.idAleatorio() }; })), []);
   const cerrarConfirmacion = (valor) => { if (confirmacion) confirmacion.resolver(valor); setConfirmacion(null); };
+
+  // Guarda de salida: una pantalla con algo que se perdería (p. ej. un archivo subiendo) la fija con
+  // fijarGuardaSalida((tipo) => null | { titulo, mensaje }), donde tipo es 'navegar', 'contrato',
+  // 'periodo', 'sesion' o 'cerrar'. Mientras tanto, esas salidas piden confirmación.
+  // Con la guarda puede venir vaciar(): guarda ya lo pendiente (se usa antes de cerrar la sesión).
+  const guardaSalida = useRef(null);
+  const vaciado = useRef(null);
+  const fijarGuardaSalida = useCallback((fn, vaciar) => { guardaSalida.current = fn || null; vaciado.current = (fn && vaciar) || null; }, []);
+  const motivoSalida = (tipo) => { try { return guardaSalida.current ? guardaSalida.current(tipo) : null; } catch (e) { return null; } };
+  const pedirSalida = useCallback(async (tipo = 'navegar') => {
+    const m = motivoSalida(tipo);
+    return !m || confirmar({ titulo: m.titulo, mensaje: m.mensaje, textoOk: 'Salir' });
+  }, [confirmar]);
+  useEffect(() => {
+    const avisarAlCerrar = (e) => { if (motivoSalida('cerrar')) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', avisarAlCerrar);
+    return () => window.removeEventListener('beforeunload', avisarAlCerrar);
+  }, []);
+
+  // Rutas. La posición de cada entrada del historial sale de la Navigation API (Chrome, Edge) o, sin
+  // ella, de una serie propia en history.state ({ base, idx }): una entrada nueva sigue a la anterior
+  // y una sin posición a la que se llega recorriendo el historial (p. ej. de antes de publicar esta
+  // versión) empieza otra serie. Un cambio de hash que no hizo la app (Atrás, Adelante, un enlace)
+  // pasa por la guarda mientras haya algo que se perdería:
+  //  - Atrás o Adelante dentro de la serie: se vuelve a la entrada de la pantalla (history.go) mientras
+  //    la persona decide y, si sale, se va otra vez a la pedida. Ninguna entrada cambia.
+  //  - Sin posición comparable (un enlace, location.replace, entradas viejas): la URL de esa entrada
+  //    vuelve a la de la pantalla en el sitio (replaceState, con una marca) y al decidir recupera la suya.
+  // Al cambiar de pantalla se cierra cualquier confirmación abierta (no sigue sobre otra pantalla).
+  const ultimoHash = useRef(window.location.hash);
+  const esperado = useRef(null);   // { hash, empuja } que la propia app acaba de pedir (ya preguntó)
+  const volviendo = useRef(null);  // { resolver, timer } mientras se vuelve a la entrada de la pantalla
+  const posicion = useRef(null);   // { base, idx } de la entrada de la pantalla
+  const navPantalla = useRef(null); // navigation.currentEntry.index de la entrada de la pantalla
+  const largo = useRef(window.history.length);
+  const turno = useRef(0);
+  useEffect(() => {
+    const navIdx = () => { try { const e = window.navigation && window.navigation.currentEntry; return e && e.index >= 0 ? e.index : null; } catch (e) { return null; } };
+    const posDe = (st) => (st && st.base && typeof st.idx === 'number' ? { base: st.base, idx: st.idx } : null);
+    const mismaPos = (a, b) => !!(a && b && a.base === b.base && a.idx === b.idx);
+    const ponerUrl = (h, estado) => { try { window.history.replaceState(estado === undefined ? window.history.state : estado, '', h || window.location.pathname + window.location.search); } catch (e) { /* nada */ } };
+    const marcar = (p) => { ponerUrl(window.location.hash, { ...(window.history.state || {}), ...p }); posicion.current = p; };
+    const serieNueva = () => marcar({ base: U.idAleatorio(), idx: 0 });
+    if (posDe(window.history.state)) posicion.current = posDe(window.history.state); else serieNueva();
+    navPantalla.current = navIdx();
+    // empujada: la entrada se acaba de crear (navegar, un enlace), así que va después de la anterior.
+    const aplicar = (nuevo, empujada) => {
+      const p = posDe(window.history.state);
+      if (p) posicion.current = p;
+      else if (empujada && posicion.current) marcar({ base: posicion.current.base, idx: posicion.current.idx + 1 });
+      else serieNueva();
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
+      if (nuevo === ultimoHash.current) return;
+      ultimoHash.current = nuevo;
+      setConfirmacion((c) => { if (c) c.resolver(false); return null; });
+      setRuta(parsearRuta()); window.scrollTo({ top: 0 });
+    };
+    // Llegada a la entrada de la pantalla. Si no llega (posiciones que no cuadran) o cae en otra
+    // entrada, la URL se corrige ahí mismo.
+    const terminarVuelta = () => {
+      const v = volviendo.current; volviendo.current = null;
+      if (v) clearTimeout(v.timer);
+      if (window.location.hash !== ultimoHash.current) ponerUrl(ultimoHash.current);
+      const p = posDe(window.history.state);
+      if (p) posicion.current = p;
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
+      if (v) v.resolver();
+    };
+    const volver = (pasos) => new Promise((resolver) => {
+      volviendo.current = { resolver, timer: setTimeout(terminarVuelta, 1500) };
+      window.history.go(pasos);
+    });
+    const irA = (h) => { window.location.hash = h; esperado.current = { hash: window.location.hash, empuja: true }; };
+    const f = async () => {
+      if (volviendo.current) { terminarVuelta(); return; }
+      const nuevo = window.location.hash;
+      const propio = !!esperado.current && nuevo === esperado.current.hash;
+      const empujaPropio = propio && esperado.current.empuja;
+      esperado.current = null;
+      const estadoDestino = window.history.state;
+      const empujada = empujaPropio || (!propio && !posDe(estadoDestino) && window.history.length > largo.current);
+      if (propio || nuevo === ultimoHash.current || !motivoSalida('navegar')) { aplicar(nuevo, empujada); return; }
+      const mio = ++turno.current;
+      const pantalla = ultimoHash.current;
+      const destino = posDe(estadoDestino);
+      const actual = posicion.current;
+      const navAntes = navPantalla.current;
+      const navDestino = navIdx();
+      const delta = navDestino !== null && navAntes !== null ? navDestino - navAntes
+        : (destino && actual && destino.base === actual.base ? destino.idx - actual.idx : 0);
+      const enPantalla = () => { const n = navIdx(); return n !== null && navAntes !== null ? n === navAntes : mismaPos(posDe(window.history.state), actual); };
+      const vuelta = delta ? volver(-delta) : null;
+      if (!delta) ponerUrl(pantalla, { ...(estadoDestino || {}), marca: mio });
+      const sale = await pedirSalida('navegar');
+      if (vuelta) await vuelta;
+      if (mio !== turno.current || ultimoHash.current !== pantalla) return;   // otro cambio decidió mientras tanto
+      if (delta) {
+        if (!sale) return;
+        if (enPantalla()) { esperado.current = { hash: nuevo, empuja: false }; window.history.go(delta); } else irA(nuevo);
+        return;
+      }
+      const st = window.history.state;
+      if (!st || st.marca !== mio) {   // con el diálogo abierto pasó a otra entrada con la misma URL
+        if (sale) irA(nuevo); else if (window.location.hash !== pantalla) ponerUrl(pantalla);
+        return;
+      }
+      ponerUrl(nuevo, estadoDestino);   // la entrada recupera su URL y su estado
+      if (sale) { aplicar(nuevo, empujada); return; }
+      // Cancelado en el sitio: esta entrada pasa a ser la de la pantalla.
+      ponerUrl(pantalla);
+      if (empujada && actual) marcar({ base: actual.base, idx: actual.idx + 1 }); else serieNueva();
+      largo.current = window.history.length;
+      navPantalla.current = navIdx();
+    };
+    window.addEventListener('hashchange', f);
+    return () => { window.removeEventListener('hashchange', f); if (volviendo.current) clearTimeout(volviendo.current.timer); };
+  }, [pedirSalida]);
+  const navegar = useCallback(async (hash) => {
+    if (!(await pedirSalida('navegar'))) return;
+    const antes = window.location.hash;
+    window.location.hash = hash;
+    // Se compara con lo que quedó en la barra (ya codificado), que es lo que llega en hashchange.
+    if (window.location.hash === antes) { setRuta(parsearRuta()); return; }
+    esperado.current = { hash: window.location.hash, empuja: true };
+  }, [pedirSalida]);
 
   // Tema
   const alternarTema = useCallback(() => {
@@ -189,21 +312,33 @@ const App = () => {
   }, [usuario, rol]);
   useEffect(() => { if (estado === 'listo') recargarContadores(); }, [estado, recargarContadores]);
 
-  const elegirContrato = useCallback((id) => { setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ } }, []);
-  const elegirPeriodo = useCallback((p) => setPeriodo(p), []);
+  const contratoActual = useRef(contratoId); contratoActual.current = contratoId;
+  const periodoActual = useRef(periodo); periodoActual.current = periodo;
+  const elegirContrato = useCallback(async (id) => {
+    if (id === contratoActual.current || !(await pedirSalida('contrato'))) return;
+    setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ }
+  }, [pedirSalida]);
+  const elegirPeriodo = useCallback(async (p) => { if (p !== periodoActual.current && (await pedirSalida('periodo'))) setPeriodo(p); }, [pedirSalida]);
   // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
-  const cambiarVista = useCallback((vista) => {
+  const cambiarVista = useCallback(async (vista) => {
+    if (!(await pedirSalida('navegar'))) return;
+    guardaSalida.current = null; vaciado.current = null;
     vistaRef.current = vista;
     try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
     window.location.hash = '#/';
     cargarTodo();
-  }, [cargarTodo]);
+  }, [cargarTodo, pedirSalida]);
   const cerrarSesion = useCallback(async () => {
+    if (!(await pedirSalida('sesion'))) return;
+    // Lo pendiente del formulario se guarda antes de desconectar: sin sesión, las reglas lo rechazan.
+    const vaciar = vaciado.current;
+    guardaSalida.current = null; vaciado.current = null;
+    if (vaciar) { try { await Promise.race([Promise.resolve(vaciar()), U.esperar(5000)]); } catch (e) { /* se intentó */ } }
     await Auth.cerrarSesion();
     vistaRef.current = '';
     try { localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
     setUsuario(null); setRol(null); setPropios([]); setContratos([]); setEstado('anonimo'); window.location.hash = '#/';
-  }, []);
+  }, [pedirSalida]);
 
   const contrato = contratos.find((c) => c.id === contratoId) || null;
   const ventana = ventanas.find((v) => v.periodo === periodo) || null;
@@ -212,7 +347,7 @@ const App = () => {
     rol: usuario ? rol || usuario.rol : null, rolCuenta: usuario ? usuario.rol : null, propios,
     vista: usuario && rol === 'contratista' && usuario.rol !== 'contratista' ? 'contratista' : '',
     parametros, formularios, catalogos, contratos, contrato, contratoId, periodo, ventana, ventanas, contadores, tema, ruta,
-    navegar, avisar, confirmar, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, cambiarVista, recargarTodo: () => cargarTodo(true), recargarContadores,
+    navegar, avisar, confirmar, fijarGuardaSalida, alternarTema, elegirContrato, elegirPeriodo, cerrarSesion, cambiarVista, recargarTodo: () => cargarTodo(true), recargarContadores,
   };
 
   let contenido;
@@ -229,7 +364,7 @@ const App = () => {
       {contenido}
       <Toasts lista={toasts} onCerrar={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
       {confirmacion ? (
-        <Modal titulo={confirmacion.titulo || 'Confirmar'} onCerrar={() => cerrarConfirmacion(false)} pie={<><Boton onClick={() => cerrarConfirmacion(false)}>{confirmacion.textoCancelar || 'Cancelar'}</Boton><Boton variante={confirmacion.peligro ? 'peligro' : 'primario'} onClick={() => cerrarConfirmacion(true)}>{confirmacion.textoOk || 'Aceptar'}</Boton></>}>
+        <Modal key={confirmacion.clave} titulo={confirmacion.titulo || 'Confirmar'} onCerrar={() => cerrarConfirmacion(false)} pie={<><Boton onClick={() => cerrarConfirmacion(false)}>{confirmacion.textoCancelar || 'Cancelar'}</Boton><Boton variante={confirmacion.peligro ? 'peligro' : 'primario'} onClick={() => cerrarConfirmacion(true)}>{confirmacion.textoOk || 'Aceptar'}</Boton></>}>
           <p className="text-sm whitespace-pre-wrap">{confirmacion.mensaje}</p>
         </Modal>
       ) : null}

@@ -133,9 +133,12 @@ const armarRespuestasIniciales = (formulario, ctx, existentes) => {
 
 /* ===== 2. Validación ===== */
 const estaVacio = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+// Para validar y medir el avance, solo espacios también cuenta como vacío: un campo obligatorio
+// no se llena con espacios (estaVacio, sin esto, decide qué es dato propio al sincronizar).
+const sinLlenar = (v) => estaVacio(v) || (typeof v === 'string' && !v.trim());
 const validarValor = (q, v) => {
   if (q.tipo === 'CALCULADA' || q.tipo === 'SEPARADOR') return '';
-  if (estaVacio(v)) return q.obligatoria ? 'Este campo es obligatorio' : '';
+  if (sinLlenar(v)) return q.obligatoria ? 'Este campo es obligatorio' : '';
   switch (q.tipo) {
     case 'NUMERO': case 'MONEDA': case 'PORCENTAJE': {
       const n = Number(v);
@@ -181,6 +184,8 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
     if (!nuevos.length) return;
     // Una subida a la vez por campo (también al soltar archivos): no se pasa del máximo.
     if (subiendo) { app.avisar('info', `Espera a que termine la subida en «${q.etiqueta}»`); return; }
+    // Mientras se envía no: el archivo no iría en el envío y el borrador ya borrado volvería.
+    if (motor && motor.enviando) { app.avisar('info', 'Espera a que termine el envío'); return; }
     if (lista.length + nuevos.length > maxArchivos) { app.avisar('alerta', `Máximo ${maxArchivos} ${U.plural(maxArchivos, 'archivo', 'archivos')} en «${q.etiqueta}»`); return; }
     for (const a of nuevos) {
       const ext = U.extension(a.name);
@@ -190,6 +195,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
       try {
         const r = await subir(a, q);
         const nuevo = { nombre: r.nombre || a.name, url: r.url || '', id: r.id || '', tamano: a.size };
+        if (motor && motor.guardarYa) motor.guardarYa();   // el archivo ya está en OneDrive: al borrador sin esperar
         onCambio((vigente) => [...(Array.isArray(vigente) ? vigente : []), nuevo], { archivo: a.name });
         if (r.simulado) app.avisar('info', 'Archivo simulado (modo demostración): no se subió a SharePoint');
       } catch (e) { app.avisar(e.code === 'flujo-sin-url' ? 'alerta' : 'error', `No se pudo subir «${a.name}»: ${e.message}`); }
@@ -617,10 +623,12 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
  *  respuestasIniciales (objeto o null), puedeEditar(q, capitulo) → bool
  *  ultimoEnvio (para «Traer del mes anterior») · subir(archivo, q) → { url, id, nombre }
  *  onGuardar(respuestas, capituloId) (autoguardado, 3 s) · estadoGuardado { fecha, guardando, error }
+ *  controlRef: la página recibe { pendiente(), vaciar() } para saber si hay un autoguardado
+ *  pendiente y hacerlo ya (al cerrar la sesión o la pestaña)
  *  onEnviar(respuestasFinales) · onVistaPrevia(respuestasFinales) · textoEnviar · soloLectura
  *  capituloInicial
  */
-const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas }) => {
+const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
@@ -632,13 +640,16 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const respuestasRef = useRef(respuestas);
   respuestasRef.current = respuestas;
   const [subidas, setSubidas] = useState({});
+  const [intentoEnvio, setIntentoEnvio] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const ahoraRef = useRef(false);   // el próximo autoguardado va sin esperar (se adjuntó un archivo)
   const estadoMotor = useMemo(() => ({
     subidas: (clave) => subidas[clave] || 0,
     marcarSubida: (clave, d) => setSubidas((m) => { const n = (m[clave] || 0) + d; const c = { ...m }; if (n > 0) c[clave] = n; else delete c[clave]; return c; }),
     leer: (id) => respuestasRef.current[id],
-  }), [subidas]);
-  const [intentoEnvio, setIntentoEnvio] = useState(false);
-  const [enviando, setEnviando] = useState(false);
+    guardarYa: () => { ahoraRef.current = true; },
+    enviando,
+  }), [subidas, enviando]);
   const ev = useMemo(() => Formulas.crearEvaluador({ formulario, respuestas, parametros: ctx.parametros }), [formulario, respuestas, ctx.parametros]);
   const obtener = useCallback((n) => ev.valor(n), [ev]);
   const visibleQ = (q) => (q.condicion ? Formulas.evaluarCondicion(q.condicion, obtener) : true);
@@ -647,17 +658,61 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const reloj = useReloj(10000);
   const idBase = `f-${formulario.id}`;
 
-  // Autoguardado con retardo de 3 s (solo si hay algo editable).
+  // Autoguardado con retardo de 3 s (solo si hay algo editable); sin espera al adjuntar un archivo.
+  // Lo pendiente también se guarda al salir del formulario, salvo que ya se haya enviado (el envío
+  // borra el borrador). Mientras se envía no se autoguarda; si el envío no se hace, se guarda al final.
   const guardarRef = useRef(onGuardar);
   guardarRef.current = onGuardar;
+  const capituloRef = useRef(capituloId);
+  capituloRef.current = capituloId;
+  const guardadasRef = useRef(respuestas);   // las últimas respuestas mandadas a guardar
+  const pendienteRef = useRef(null);         // guardado programado que aún no se hace
+  const enCursoRef = useRef(null);           // promesa del guardado que se está haciendo
+  const temporizadorRef = useRef(null);
+  const enviandoRef = useRef(false);
   const primera = useRef(true);
   useEffect(() => {
-    if (onCambioRespuestas) onCambioRespuestas(respuestas);
     if (primera.current) { primera.current = false; return undefined; }
     if (!guardarRef.current || soloLectura) return undefined;
-    const t = setTimeout(() => guardarRef.current(respuestas, capituloId), 3000);
-    return () => clearTimeout(t);
+    const guardar = () => {
+      if (enviandoRef.current || pendienteRef.current !== guardar || !guardarRef.current) return undefined;
+      pendienteRef.current = null;
+      guardadasRef.current = respuestas;
+      const p = Promise.resolve(guardarRef.current(respuestas, capituloRef.current));
+      enCursoRef.current = p;
+      const fin = () => { if (enCursoRef.current === p) enCursoRef.current = null; };
+      p.then(fin, fin);
+      return p;
+    };
+    pendienteRef.current = guardar;
+    temporizadorRef.current = setTimeout(guardar, ahoraRef.current ? 0 : 3000);
+    ahoraRef.current = false;
+    return () => clearTimeout(temporizadorRef.current);
   }, [respuestas]); // eslint-disable-line
+  useEffect(() => () => { if (pendienteRef.current && guardarRef.current) pendienteRef.current(); }, []);
+  useEffect(() => {
+    if (!controlRef) return undefined;
+    controlRef.current = {
+      // Algo por guardar o guardándose (mientras se envía no: el envío borra el borrador).
+      pendiente: () => !enviandoRef.current && (!!pendienteRef.current || !!enCursoRef.current),
+      // Guarda ya lo programado y espera también lo que ya se estaba guardando.
+      vaciar: () => {
+        const enCurso = enCursoRef.current;
+        const g = pendienteRef.current;
+        if (g) clearTimeout(temporizadorRef.current);
+        const ahora = g ? g() : null;
+        return Promise.all([enCurso, ahora].map((x) => Promise.resolve(x).catch(() => null)));
+      },
+    };
+    return () => { controlRef.current = null; };
+  }, []); // eslint-disable-line
+  // A la página: respuestas, capítulo y si algo cambió desde que se abrió; y las subidas en curso
+  // (con eso confirma la salida: app.fijarGuardaSalida).
+  const inicialesRef = useRef(respuestas);
+  useEffect(() => { if (onCambioRespuestas) onCambioRespuestas(respuestas, capituloId, respuestas !== inicialesRef.current); }, [respuestas, capituloId]); // eslint-disable-line
+  useEffect(() => { if (onCambioSubidas) onCambioSubidas(Object.keys(subidas).length); }, [subidas]); // eslint-disable-line
+  // Al desmontarse (salir, o cambiar de contrato o período) ya no hay subidas ni cambios que cuidar.
+  useEffect(() => () => { if (onCambioSubidas) onCambioSubidas(0); if (onCambioRespuestas) onCambioRespuestas(null, null, false); }, []); // eslint-disable-line
 
   // Si la plantilla cambia con el formulario abierto («Actualizar datos»), se infieren las marcas
   // sobre lo que ya hay, como al abrir. Solo si cambió de verdad: recargar crea objetos nuevos
@@ -716,12 +771,12 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         if (!filas.length || !subs.length) { total += 1; if (filas.length) llenas += 1; return; }
         filas.forEach((f, i) => {
           const obtenerFila = (n) => (n.startsWith('fila.') ? ev.valorFila(q.id, i, n.slice(5)) : ev.valor(n));
-          subs.forEach((s) => { if (s.condicion && !Formulas.evaluarCondicion(s.condicion, obtenerFila)) return; total += 1; if (!estaVacio(f[s.id])) llenas += 1; });
+          subs.forEach((s) => { if (s.condicion && !Formulas.evaluarCondicion(s.condicion, obtenerFila)) return; total += 1; if (!sinLlenar(f[s.id])) llenas += 1; });
         });
         return;
       }
       total += 1;
-      if (!estaVacio(respuestas[q.id])) llenas += 1;
+      if (!sinLlenar(respuestas[q.id])) llenas += 1;
     });
     return total ? Math.round((llenas / total) * 100) : 100;
   };
@@ -757,8 +812,21 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     if (Object.keys(subidas).length) { app.avisar('alerta', 'Espera a que terminen de subir los archivos'); return; }
     setIntentoEnvio(true);
     if (Object.keys(errores).length) { app.avisar('alerta', `Hay ${Object.keys(errores).length} ${U.plural(Object.keys(errores).length, 'campo por corregir', 'campos por corregir')}`); irAPrimerError(); return; }
+    // Lo pendiente se guarda antes de confirmar: si la pestaña se cierra con el diálogo abierto, no se
+    // pierde (y si se envía, el envío borra después ese borrador).
+    clearTimeout(temporizadorRef.current);
+    if (pendienteRef.current) pendienteRef.current();
     setEnviando(true);
-    try { await onEnviar(respuestasFinales()); } finally { setEnviando(false); }
+    enviandoRef.current = true;
+    let enviado = false;
+    try { enviado = (await onEnviar(respuestasFinales())) === true; }
+    finally {
+      enviandoRef.current = false;
+      setEnviando(false);
+      clearTimeout(temporizadorRef.current);
+      if (enviado) pendienteRef.current = null;
+      else if (pendienteRef.current) pendienteRef.current();
+    }
   };
   // «Traer del mes anterior» (solo preguntas marcadas y si el formulario lo permite).
   const traer = (formulario.config && formulario.config.precargarUltimoEnvio && ultimoEnvio && ultimoEnvio.respuestas) ? (id, indice, subId) => {
@@ -787,8 +855,10 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const visiblesCap = capitulos.filter(capituloVisible);
   const textoGuardado = () => {
     if (!estadoGuardado) return '';
+    if (estadoGuardado.nota) return estadoGuardado.nota;
     if (estadoGuardado.guardando) return 'Guardando…';
     if (estadoGuardado.error) return `Sin guardar: ${estadoGuardado.error}`;
+    if (onGuardar && respuestas !== guardadasRef.current) return 'Cambios sin guardar';
     if (estadoGuardado.fecha) return `Guardado ${U.tiempoRelativo(estadoGuardado.fecha)}`;
     return 'Sin cambios';
   };
@@ -825,7 +895,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         </div>
         {!soloLectura ? (
           <div className="barra-fija">
-            <div className="text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
+            <div className="text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : textoGuardado() === 'Cambios sin guardar' ? 'editar' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
             <div className="flex gap-2 flex-wrap">
               {acciones}
               {onVistaPrevia ? <Boton icono="ojo" onClick={() => onVistaPrevia(respuestasFinales())}>Vista previa</Boton> : null}
