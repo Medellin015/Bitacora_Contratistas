@@ -75,7 +75,7 @@ const SelectorPeriodo = () => {
     if (app.periodo && !lista.includes(app.periodo)) lista.unshift(app.periodo);
     return lista.map((p) => ({ valor: p, etiqueta: U.nombrePeriodo(p) }));
   }, [app.periodo]);
-  return <Selector aria-label="Período" className="selector-global" style={{ width: 'auto', minHeight: 38 }} vacio={null} opciones={opciones} value={app.periodo} onChange={(e) => app.elegirPeriodo(e.target.value)} />;
+  return <Selector aria-label="Período" className="selector-global" style={{ width: 'auto' }} vacio={null} opciones={opciones} value={app.periodo} onChange={(e) => app.elegirPeriodo(e.target.value)} />;
 };
 const ChipVentana = ({ enBanner }) => {
   const app = useApp();
@@ -110,8 +110,8 @@ const MenuUsuario = () => {
   const u = app.usuario;
   return (
     <div className="relative">
-      <button type="button" className="flex items-center gap-2 rounded-full p-1 pr-2" style={{ border: '1px solid var(--borde)' }} aria-haspopup="menu" aria-expanded={abierto} onClick={() => setAbierto(!abierto)} title={u.nombreCompleto}>
-        <span className="w-8 h-8 rounded-full grid place-items-center text-xs font-bold" style={{ background: 'var(--primario)', color: 'var(--primario-texto)' }}>{U.iniciales(u.nombreCompleto)}</span>
+      <button type="button" className="boton-usuario flex items-center gap-2 rounded-full p-1 pr-2" aria-haspopup="menu" aria-expanded={abierto} onClick={() => setAbierto(!abierto)} title={u.nombreCompleto}>
+        <span className="avatar w-8 h-8 rounded-full grid place-items-center text-xs font-bold">{U.iniciales(u.nombreCompleto)}</span>
         <span className="hidden md:inline text-sm font-medium max-w-[140px] truncate">{u.nombreCorto || u.nombreCompleto}</span>
         <Icono nombre="abajo" tam={14} className="texto-3 hidden md:inline" />
       </button>

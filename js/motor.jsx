@@ -895,8 +895,8 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
         </div>
         {!soloLectura ? (
           <div className="barra-fija">
-            <div className="text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : textoGuardado() === 'Cambios sin guardar' ? 'editar' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
-            <div className="flex gap-2 flex-wrap">
+            <div className="barra-fija-estado text-xs texto-2 flex items-center gap-2" aria-live="polite"><Icono nombre={estadoGuardado && estadoGuardado.error ? 'alerta' : textoGuardado() === 'Cambios sin guardar' ? 'editar' : 'check'} tam={14} /> {textoGuardado()}{mostrarErrores && Object.keys(errores).length ? <button type="button" className="underline" style={{ color: 'var(--error)' }} onClick={irAPrimerError}>{Object.keys(errores).length} {U.plural(Object.keys(errores).length, 'error', 'errores')}</button> : null}</div>
+            <div className="barra-fija-acciones flex gap-2 flex-wrap">
               {acciones}
               {onVistaPrevia ? <Boton icono="ojo" onClick={() => onVistaPrevia(respuestasFinales())}>Vista previa</Boton> : null}
               {onEnviar ? <Boton variante="primario" icono="enviar" cargando={enviando} onClick={enviar}>{textoEnviar}</Boton> : null}

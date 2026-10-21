@@ -28,10 +28,10 @@ if (window.tailwind) tailwind.config = {
         exito: 'var(--exito)', alerta: 'var(--alerta)', error: 'var(--error)', info: 'var(--info)',
       },
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'system-ui', '"Segoe UI"', 'Roboto', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'ui-monospace', '"Cascadia Mono"', 'Consolas', 'monospace'],
+        sans: ['"IBM Plex Sans"', 'system-ui', '"Segoe UI"', 'Roboto', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', '"Cascadia Mono"', 'Consolas', 'monospace'],
       },
-      borderRadius: { md: '8px', lg: '10px', xl: '14px' },
+      borderRadius: { md: '4px', lg: '6px', xl: '8px' },
     },
   },
 };

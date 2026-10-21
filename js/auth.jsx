@@ -23,14 +23,14 @@ const MarcoAcceso = ({ children, titulo, subtitulo }) => {
     <div className="min-h-[100dvh] flex flex-col" style={{ background: 'var(--fondo)' }}>
       {MODO_DEMO ? <div className="banner-demo"><strong>Modo demostración</strong> · datos ficticios guardados solo en este navegador · {MOTIVOS_DEMO[MOTIVO_DEMO] || MOTIVOS_DEMO.forzado}</div> : null}
       <div className="flex-1 grid lg:grid-cols-[1.1fr_1fr]">
-        <aside className="hidden lg:flex flex-col justify-between p-12" style={{ background: 'var(--primario)', color: '#F6F4EF' }}>
-          <div className="marca" style={{ color: '#F6F4EF' }}><span className="marca-logo" style={{ background: '#F6F4EF', color: 'var(--primario)' }}><Icono nombre="contrato" tam={20} /></span>{app.parametros.nombreApp}</div>
+        <aside className="acceso-panel hidden lg:flex flex-col justify-between p-12">
+          <div className="marca"><span className="marca-logo"><Icono nombre="contrato" tam={20} /></span>{app.parametros.nombreApp}</div>
           <div className="max-w-md">
-            <p className="text-xs uppercase tracking-[0.2em] opacity-80 mb-3">{app.parametros.nombreDependencia}</p>
-            <h1 className="text-3xl font-semibold leading-tight mb-4" style={{ color: '#F6F4EF' }}>Informes de ejecución y cuentas de cobro, en un solo lugar.</h1>
-            <p className="opacity-85 text-sm leading-relaxed">Diligencia el informe mensual y la cuenta de cobro dentro de la ventana del período, descarga el Word en el formato institucional y sigue las correcciones desde Solicitudes.</p>
+            <p className="acceso-dependencia text-xs uppercase tracking-[0.2em] mb-3">{app.parametros.nombreDependencia}</p>
+            <h1 className="text-3xl font-semibold leading-tight mb-4">Informes de ejecución y cuentas de cobro, en un solo lugar.</h1>
+            <p className="acceso-lema text-sm leading-relaxed">Diligencia el informe mensual y la cuenta de cobro dentro de la ventana del período, descarga el Word en el formato institucional y sigue las correcciones desde Solicitudes.</p>
           </div>
-          <p className="text-xs opacity-70">v{VERSION_APP} · {app.parametros.nombreEntidad}</p>
+          <p className="acceso-version text-xs">v{VERSION_APP} · {app.parametros.nombreEntidad}</p>
         </aside>
         <main className="flex items-center justify-center p-4 sm:p-8">
           <div className="w-full max-w-md entrar">

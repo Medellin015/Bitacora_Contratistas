@@ -416,7 +416,7 @@
       hoja['!autofilter'] = { ref: X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(aoa.length - 1, 1), c: h.columnas.length - 1 } }) };
       h.columnas.forEach((c, j) => {
         const cab = hoja[X.utils.encode_cell({ r: 0, c: j })];
-        if (cab) cab.s = { font: { bold: true, color: { rgb: 'FFFFFF' }, name: 'Arial', sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: '0E5E6F' } }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true }, border: { top: borde, bottom: borde, left: borde, right: borde } };
+        if (cab) cab.s = { font: { bold: true, color: { rgb: 'FFFFFF' }, name: 'Arial', sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: '0A7386' } }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true }, border: { top: borde, bottom: borde, left: borde, right: borde } };
         for (let r = 1; r < aoa.length; r++) {
           const celda = hoja[X.utils.encode_cell({ r, c: j })];
           if (!celda) continue;
