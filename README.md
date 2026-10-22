@@ -21,14 +21,14 @@ los tokens de tema, componentes y animaciones.
 | `js/flujos.js` | Llamadas a los flujos de Power Automate: subir archivo, notificar, Word → PDF (`window.Flujos`). |
 | `js/informe-docx.js` | Generador del informe mensual en Word con docx.js (`window.InformeDocx`). |
 | `js/descargas.js` | Word, Excel (con plan B en CSV) y vista previa (`window.Descargas`). |
-| `js/lector-planilla.js` | Lector de planillas de seguridad social: al adjuntar el PDF corre Python en el navegador (Pyodide + pypdf en un Web Worker) y devuelve número, fecha y valores (`window.LectorPlanilla`). |
-| `js/lector-planilla-worker.js` | El Web Worker del lector: carga Pyodide, pypdf (verificado con sha256) y `py/leer_planilla.py`. |
+| `js/lector-planilla.js` | Lector de planillas de seguridad social: al adjuntar el PDF corre Python en el navegador (Pyodide + pypdf en un Web Worker) y devuelve número, fecha y valores (`window.LectorPlanilla`). Si la planilla es escaneada, la lee con OCR (PDF.js + Tesseract.js). |
+| `js/lector-planilla-worker.js` | El Web Worker del lector: carga Pyodide, pypdf (verificado con sha256) y `py/leer_planilla.py`; para el OCR, limpia la imagen de cada página (fondo, inclinación, líneas de tablas). |
 | `js/ui-base.jsx` … `js/app.jsx` | Interfaz React: componentes base, acceso, layout, motor de formularios, pantallas por rol y raíz de la app. |
 | `firestore.rules` | Reglas de seguridad de Firestore por rol. |
 | `firestore.indexes.json` | Índices compuestos que necesitan las consultas de envíos y solicitudes. |
 | `firebase.json` | Configuración para publicar reglas e índices con la CLI de Firebase. |
-| `py/leer_planilla.py` | Lector en Python de la planilla PILA en PDF. Corre en el navegador (Pyodide) y también en la terminal. |
-| `py/probar_leer_planilla.py` | Pruebas del lector con textos de planillas ficticias (`python3 py/probar_leer_planilla.py`). |
+| `py/leer_planilla.py` | Lector en Python de la planilla PILA en PDF (y de lo que reconoce el OCR en una escaneada). Corre en el navegador (Pyodide) y también en la terminal. |
+| `py/probar_leer_planilla.py` | Pruebas del lector con textos y OCR de planillas ficticias (`python3 py/probar_leer_planilla.py`). |
 | `docs/flujos.md` | Contrato y paso a paso de los flujos de Power Automate (`subirArchivo`, `notificar`, `docxAPdf`). |
 
 Los `.jsx` comparten el ámbito global (constantes de primer nivel), por eso el
@@ -100,8 +100,22 @@ coinciden con los de la fila, o si la suma no da el total.
   quedan en la caché del navegador. Si la red los bloquea, la app lo avisa y la
   persona escribe los valores a mano como antes. Las planillas cifradas con
   AES cargan además pycryptodome desde el mismo CDN de Pyodide.
-- **No lee** PDF escaneados (imágenes sin texto) ni planillas con contraseña de
-  apertura: lo dice y se escriben a mano.
+- **Planillas escaneadas (OCR)**: si el PDF no tiene texto (un escaneo o una
+  foto; también si solo trae el pie de la app de escáner), la app lo lee con
+  reconocimiento de texto, también en el navegador: **PDF.js** dibuja las dos
+  primeras páginas, el worker empareja el fondo (la sombra de una foto),
+  endereza la hoja y borra las líneas de las tablas, **Tesseract.js** reconoce
+  el texto en español y Python arma las filas por la posición de cada palabra.
+  Como el OCR puede confundir dígitos, solo se llena lo que se puede comprobar:
+  cada aporte debe cuadrar con su tarifa sobre un IBC confirmado (el de la
+  planilla, el de la fila o el que comparten salud y pensión), el número de
+  planilla se lee dos veces y, si no coincide, queda vacío, y la fecha de pago
+  debe caer cerca del período. Lo demás queda vacío con el aviso «No se pudo
+  leer con seguridad…». Tarda unos segundos por página; la primera vez descarga
+  unos 8 MB de `cdn.jsdelivr.net` (PDF.js 6.4.299, Tesseract.js 7.0.0 verificado
+  con sha384 y el modelo del español, que queda guardado en el navegador). Con
+  `window.LECTOR_PLANILLA_CONFIG = { ocr: false }` se apaga.
+- **No lee** planillas con contraseña de apertura: lo dice y se escriben a mano.
 - **Plantilla**: se activa con `lector`, `llenar` y `pistas` en la pregunta
   ARCHIVO (cuenta de cobro versión 5). En una instalación que ya tenía la
   versión 4, el administrador la publica con **Formularios → Actualizar**.
@@ -110,7 +124,8 @@ coinciden con los de la fila, o si la suma no da el total.
   ```bash
   pip install pypdf==6.19.0
   python3 py/leer_planilla.py planilla.pdf          # agrega --texto para ver lo que extrae pypdf
-  python3 py/probar_leer_planilla.py                # pruebas (no necesitan pypdf)
+  python3 py/leer_planilla.py --tsv pagina.tsv      # una escaneada: tesseract pagina.png pagina -l spa --psm 11 tsv
+  python3 py/probar_leer_planilla.py                # pruebas (no necesitan pypdf ni Tesseract)
   ```
 
 ### Cuentas: nadie se registra ni activa nada

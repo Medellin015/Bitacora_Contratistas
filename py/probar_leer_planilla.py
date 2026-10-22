@@ -1,9 +1,10 @@
-"""Pruebas del lector de planillas (solo el análisis del texto: no necesitan pypdf).
+"""Pruebas del lector de planillas (solo el análisis del texto: no necesitan pypdf ni Tesseract).
 
 Uso:  python3 py/probar_leer_planilla.py      (o: python3 -m unittest discover py)
 
-Los textos imitan lo que pypdf extrae de comprobantes de distintos operadores.
-Son datos ficticios: ninguna persona, cédula ni planilla real.
+Los textos imitan lo que pypdf extrae de comprobantes de distintos operadores, y las palabras con su caja,
+lo que entrega Tesseract (OCR) de una planilla escaneada. Son datos ficticios: ninguna persona, cédula ni
+planilla real.
 """
 import os
 import sys
@@ -126,6 +127,111 @@ Valor pagado: $ 580.500
 Referencia 1: 9400001234
 Fecha: 2026-10-05
 """
+
+
+# ===== Planilla escaneada: palabras con su caja, como el TSV de Tesseract =====
+def tsv_de(filas, letra=22, alto=30):
+    """TSV de Tesseract (nivel 5 = palabra) para un texto ficticio. filas: [(y, [(x, 'texto de la celda'), ...])].
+    Cada celda va en su propio bloque, como cuando Tesseract parte una tabla, y la «y» puede moverse unos
+    píxeles entre celdas de la misma fila (página algo torcida)."""
+    salida, bloque = [], 0
+    for y, celdas in filas:
+        for x, texto in celdas:
+            bloque += 1
+            for n, palabra in enumerate(texto.split()):
+                salida.append('\t'.join(str(c) for c in (5, 1, bloque, 1, 1, n + 1, x, y, len(palabra) * letra, alto, 91.5, palabra)))
+                x += (len(palabra) + 1) * letra
+    return '\n'.join(['level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext'] + salida)
+
+
+# La autoliquidación consolidada, escaneada, con lo que el OCR suele confundir: «N*», «s» por «$», «so» por «$0».
+def consolidada_escaneada(salud='$ 350.000', ibc='$ 2.800.000', arl='$ 14.700', pension='s 448.000', fecha='05/10/2026', extra=''):
+    return tsv_de([
+        (100, [(150, 'AUTOLIQUIDACION CONSOLIDADA')]),
+        (160, [(150, 'N* de planilla: 77700011'), (1500, 'Periodo Cotización: septiembre de 2026')]),
+        (220, [(1500, f'PAGADO {fecha}')]),
+        (280, [(150, 'Razón Social CONTRATISTA DE PRUEBA' + extra)]),
+        (400, [(150, 'Pensiones'), (900, 'Salud'), (1500, 'Riesgos'), (2100, 'Total')]),
+        (460, [(150, 'Administradora IBC Aporte'), (900, 'Administradora IBC Aporte'), (1500, 'Tarifa IBC Aporte')]),
+        (520, [(150, f'PROTECCION {ibc}'), (530, pension), (900, f'EPS SURA {ibc}'), (1240, salud),
+               (1500, f'0,522 {ibc}'), (1820, arl), (2100, 'so $ 812.700')]),
+        (523, [(2400, 'so')]),
+    ])
+
+
+class Ocr(unittest.TestCase):
+    PISTAS = {'ibc': 2800000, 'anio': 2026, 'mes': 9}
+
+    def test_arma_las_filas_aunque_tesseract_parta_la_tabla(self):
+        palabras = L.palabras_de_tsv(consolidada_escaneada())
+        lineas = L.texto_por_columnas(palabras).splitlines()
+        self.assertEqual(len(lineas), 7)                    # la celda 3 px más abajo sigue en su fila
+        fila = next(l for l in lineas if 'PROTECCION' in l)
+        self.assertLess(fila.index('PROTECCION'), fila.index('EPS SURA'))
+        self.assertIn('so', fila.split()[-1])
+        # Los encabezados quedan sobre sus valores (misma columna).
+        encabezado = next(l for l in lineas if l.lstrip().startswith('Pensiones'))
+        self.assertEqual(encabezado.index('Salud'), fila.index('EPS SURA'))
+
+    def test_lee_la_planilla_escaneada_y_avisa_que_fue_con_ocr(self):
+        r = L.leer_ocr([{'tsv': consolidada_escaneada()}], self.PISTAS)
+        self.assertTrue(r['ok'], r)
+        for k, v in {'numeroPlanilla': '77700011', 'fechaPago': '2026-10-05', 'periodoPension': '2026-09', 'ibc': 2800000,
+                     'salud': 350000, 'pension': 448000, 'arl': 14700, 'total': 812700}.items():
+            self.assertEqual(r.get(k), v, k)
+        self.assertTrue(r['ocr'])
+        self.assertEqual(r['avisos'], [L.AVISO_OCR])
+
+    def test_confusiones_del_ocr(self):
+        casos = {'N* de planilla 7701234567': 'N° de planilla 7701234567', 'Planilla Ne 5512345678': 'Planilla N° 5512345678',
+                 'PROTECCION s 448.000': 'PROTECCION $ 448.000', 'Cajas so so': 'Cajas $0 $0', '2.OOO.OOO': '2.000.000',
+                 'Fecha de pago: 2O26-1O-O5': 'Fecha de pago: 2026-10-05', 'Salud 250. 000': 'Salud 250.000 ',
+                 '1BC 18C': 'IBC IBC', 'Salud ............ 250,000.00': 'Salud              250,000.00',
+                 'SOLIDARIDAD EPS SURA BOSQUE S10': 'SOLIDARIDAD EPS SURA BOSQUE S10'}
+        for texto, limpio in casos.items():
+            self.assertEqual(L.limpiar_ocr(texto), limpio, texto)
+        self.assertEqual(len(L.limpiar_ocr('Salud 250. 000   x')), len('Salud 250. 000   x'))   # las columnas no se mueven
+
+    def test_un_valor_mal_reconocido_no_se_llena(self):
+        # 350.000 leído como 850.000: no es el 12,5 % del IBC ni cuadra con el total; el resto sí se llena.
+        r = L.leer_ocr([{'tsv': consolidada_escaneada(salud='$ 850.000')}], self.PISTAS)
+        self.assertIsNone(r['salud'])
+        self.assertEqual((r['pension'], r['arl']), (448000, 14700))
+        self.assertTrue(any(a.startswith('No se pudo leer con seguridad el valor de salud') for a in r['avisos']), r['avisos'])
+
+    def test_un_ibc_mal_reconocido_no_confirma_otros_valores(self):
+        # IBC 2.800.000 leído como 1.800.000 en todas partes y la ARL como 9.400 (cuadra con el 0,522 % de 1.800.000):
+        # sin el IBC de la fila, la ARL no se puede comprobar y queda vacía.
+        tsv = consolidada_escaneada(ibc='$ 1.800.000', arl='$ 9.400', salud='$ 380.000', pension='$ 448.000')
+        r = L.leer_ocr([{'tsv': tsv}], {})
+        self.assertIsNone(r['arl'])
+        self.assertIsNone(r['ibc'])
+
+    def test_fecha_de_pago_fuera_del_periodo_no_se_llena(self):
+        r = L.leer_ocr([{'tsv': consolidada_escaneada(fecha='05/10/2025')}], self.PISTAS)
+        self.assertIsNone(r['fechaPago'])
+        self.assertEqual(r['salud'], 350000)
+
+    def test_pension_en_cero_solo_si_es_pensionado(self):
+        r = L.leer_ocr([{'tsv': consolidada_escaneada(pension='$ 0')}], self.PISTAS)
+        self.assertIsNone(r['pension'])
+        tsv = consolidada_escaneada(pension='$ 0', extra=' - cotizante pensionado')
+        self.assertEqual(L.leer_ocr([{'tsv': tsv}], self.PISTAS)['pension'], 0)
+
+    def test_numero_que_no_se_pudo_confirmar_no_se_llena(self):
+        # El navegador relee cada número largo y tacha («########») el que no coincide la segunda vez.
+        tsv = consolidada_escaneada().replace('77700011', '########')
+        r = L.leer_ocr([{'tsv': tsv}], self.PISTAS)
+        self.assertIsNone(r['numeroPlanilla'])
+        self.assertEqual(r['salud'], 350000)
+        self.assertTrue(any(a.startswith('No se pudo leer con seguridad el número de planilla') for a in r['avisos']), r['avisos'])
+
+    def test_sin_texto_y_json(self):
+        r = L.leer_ocr([{'tsv': ''}])
+        self.assertEqual((r['ok'], r['error'], r['ocr']), (False, 'sin-datos', True))
+        import json
+        r = json.loads(L.leer_ocr_json(json.dumps([{'tsv': consolidada_escaneada()}]), json.dumps(self.PISTAS)))
+        self.assertEqual(r['salud'], 350000)
 
 
 class Analisis(unittest.TestCase):

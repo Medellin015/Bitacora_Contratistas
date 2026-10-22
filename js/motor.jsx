@@ -179,6 +179,19 @@ const MENSAJES_LECTOR = {
   carga: 'No se pudo cargar el lector de planillas (la red puede estar bloqueando cdn.jsdelivr.net o files.pythonhosted.org).',
   tiempo: 'El lector de planillas tardó demasiado.',
   navegador: 'Este navegador no puede leer la planilla.',
+  // Planilla escaneada (OCR)
+  'ocr-carga': 'No se pudo cargar el reconocimiento de texto (OCR) para la planilla escaneada (la red puede estar bloqueando cdn.jsdelivr.net).',
+  'ocr-tiempo': 'El reconocimiento de texto (OCR) de la planilla escaneada tardó demasiado.',
+  ocr: 'No se pudo leer la planilla escaneada.',
+  'ocr-sin-datos': 'No se reconocieron los datos en la planilla escaneada (puede estar borrosa, oscura o recortada).',
+};
+const mensajeLector = (r) => MENSAJES_LECTOR[r && r.ocr ? `ocr-${r.error}` : ''] || MENSAJES_LECTOR[r && r.error] || (r && r.mensaje) || 'No se pudo leer la planilla.';
+// Avance del OCR: lo que dice la caja mientras se lee una planilla escaneada.
+const textoAvanceOcr = (a) => {
+  if (a.fase === 'ocr-carga') return 'La planilla es escaneada: preparando el reconocimiento de texto (OCR). La primera vez se descarga (unos 8 MB) y tarda un poco más.';
+  if (a.fase === 'ocr-analisis') return 'La planilla es escaneada: comprobando los valores reconocidos…';
+  const pagina = a.paginas > 1 ? ` de la página ${a.pagina} de ${a.paginas}` : '';
+  return `La planilla es escaneada: reconociendo el texto (OCR)${pagina}… ${Math.round((a.progreso || 0) * 100)}\u00a0%`;
 };
 // lector (opcional, de la compuesta): { pistas: () => ({ ibc, anio, mes }), aplicar: (resultado) => resumen | '' | null }
 // ('' si no hubo nada que llenar; null si la fila ya no existe).
@@ -199,16 +212,23 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
   const leerPlanilla = async (archivo) => {
     const turno = ++turnoLectura.current;
     setLectura({ estado: 'leyendo', primera: LectorPlanilla.estado() !== 'listo' });
+    let ultimo = '';
+    const alAvanzar = (avance) => {
+      const clave = `${avance.fase}|${avance.pagina}|${Math.round((avance.progreso || 0) * 20)}`;   // de 5 % en 5 %
+      if (clave === ultimo || turno !== turnoLectura.current) return;
+      ultimo = clave;
+      setLectura((l) => (l && l.estado === 'leyendo' ? { ...l, avance } : l));
+    };
     let r;
-    try { r = await LectorPlanilla.leer(archivo, lector.pistas()); } catch (e) {
+    try { r = await LectorPlanilla.leer(archivo, lector.pistas(), alAvanzar); } catch (e) {
       if (turno === turnoLectura.current) setLectura({ estado: 'error', mensaje: MENSAJES_LECTOR[e.code] || e.message });
       return;
     }
     if (turno !== turnoLectura.current) return;
-    if (!r || !r.ok) { setLectura({ estado: 'error', mensaje: MENSAJES_LECTOR[r && r.error] || (r && r.mensaje) || 'No se pudo leer la planilla.' }); return; }
+    if (!r || !r.ok) { setLectura({ estado: 'error', mensaje: mensajeLector(r) }); return; }
     const resumen = lector.aplicar(r);
     if (resumen === null) { setLectura(null); return; }   // la fila se quitó mientras se leía
-    setLectura(resumen ? { estado: 'listo', resumen, avisos: r.avisos || [] } : { estado: 'error', mensaje: MENSAJES_LECTOR['sin-datos'] });
+    setLectura(resumen ? { estado: 'listo', resumen, avisos: r.avisos || [] } : { estado: 'error', mensaje: mensajeLector({ ...r, error: 'sin-datos' }) });
   };
   const precargarLector = () => { if (leePlanillas) LectorPlanilla.precargar().catch(() => {}); };
   const acepta = String(q.acepta || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
@@ -262,7 +282,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
         <div className={`alerta-caja mt-2 ${lectura.estado === 'error' || (lectura.avisos && lectura.avisos.length) ? 'alerta-alerta' : 'alerta-info'}`} role="status" aria-live="polite">
           <Icono nombre={lectura.estado === 'leyendo' ? 'cargando' : lectura.estado === 'error' ? 'alerta' : 'check'} className={lectura.estado === 'leyendo' ? 'girando' : ''} />
           <div className="min-w-0">
-            {lectura.estado === 'leyendo' ? <span>Leyendo la planilla…{lectura.primera ? ' La primera vez se descarga el lector (Python) y tarda unos segundos.' : ''}</span> : null}
+            {lectura.estado === 'leyendo' ? <span>{lectura.avance ? textoAvanceOcr(lectura.avance) : `Leyendo la planilla…${lectura.primera ? ' La primera vez se descarga el lector (Python) y tarda unos segundos.' : ''}`}</span> : null}
             {lectura.estado === 'listo' ? <><span><strong>Datos tomados de la planilla:</strong> {lectura.resumen}. Revísalos antes de enviar.</span>{lectura.avisos.length ? <ul className="mt-1 pl-4 list-disc">{lectura.avisos.map((t) => <li key={t}>{t}</li>)}</ul> : null}</> : null}
             {lectura.estado === 'error' ? <span>{lectura.mensaje} Escribe los valores a mano.</span> : null}
           </div>

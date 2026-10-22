@@ -12,6 +12,10 @@ Dónde corre:
         pip install pypdf==6.19.0
         python3 py/leer_planilla.py planilla.pdf
 
+Planillas escaneadas: el navegador las pasa por OCR (Tesseract.js) y manda aquí
+las palabras con su posición (TSV de Tesseract); leer_ocr() arma las filas y,
+como el OCR confunde dígitos, solo deja los valores que cuadran con las tarifas.
+
 Los operadores no comparten un formato, así que la lectura combina estrategias
 (fila por subsistema, encabezado con los valores debajo y «etiqueta: valor») y
 después revisa la coherencia con las tarifas y el total. Lo que no encuentre
@@ -20,11 +24,12 @@ queda vacío para escribirlo a mano: nada se adivina.
 Estructura:
   1. Constantes (palabras clave, tarifas, meses)
   2. Utilidades de texto (normalizar, montos, fechas, períodos)
-  3. Texto del PDF (pypdf, modos «layout» y «plain»)
+  3. Texto del PDF (pypdf, modos «layout» y «plain») y del OCR (palabras de Tesseract por columnas)
   4. Búsqueda de campos
-  5. Coherencia y resultado
+  5. Coherencia y resultado (con la validación de lo leído por OCR)
   6. Uso desde la terminal
 """
+import datetime
 import io
 import json
 import re
@@ -192,7 +197,7 @@ def numeros_planilla_en(texto):
     return [(m.group(1), m.start(1), m.end(1)) for m in re.finditer(r'(?<![\d.,/-])(\d{6,12})(?![\d.,/-]\d|\d)', texto)]
 
 
-# ===== 3. Texto del PDF =====
+# ===== 3. Texto del PDF y del OCR =====
 class ErrorLectura(Exception):
     """codigo: 'no-pdf' | 'clave' | 'cifrado' (falta pycryptodome) | 'sin-texto'."""
 
@@ -249,6 +254,114 @@ def textos_de_pdf(datos, max_paginas=5, _reintento=True):
         if isinstance(e, PdfReadError):
             raise ErrorLectura('no-pdf', f'No es un PDF válido: {e}') from e
         raise ErrorLectura('no-pdf', f'No se pudo abrir el PDF: {e}') from e
+
+
+def tiene_imagenes(datos, max_paginas=5):
+    """¿Alguna de las primeras páginas trae imágenes? (una planilla escaneada a la que el escáner le puso
+    una capa de texto que no sirve: vale la pena pasarla por OCR)."""
+    try:
+        from pypdf import PdfReader
+        lector = PdfReader(io.BytesIO(bytes(datos)))
+        if lector.is_encrypted and not lector.decrypt(''):
+            return False
+        for pagina in lector.pages[:max_paginas]:
+            objetos = (pagina.get('/Resources') or {}).get('/XObject') or {}
+            if any(objetos[k].get_object().get('/Subtype') == '/Image' for k in objetos):
+                return True
+    except Exception:  # si no se puede saber, no se insiste
+        return False
+    return False
+
+
+# El OCR (Tesseract, en js/lector-planilla.js) devuelve palabras con su caja en píxeles; aquí se arma el
+# texto como lo da pypdf en modo «layout», para que la búsqueda de campos sea la misma.
+def palabras_de_tsv(tsv):
+    """Palabras del TSV de Tesseract (filas de nivel 5): (x0, y0, x1, y1, texto, línea de Tesseract)."""
+    palabras = []
+    for fila in (tsv or '').splitlines():
+        c = fila.split('\t')
+        if len(c) < 12 or c[0] != '5':
+            continue
+        try:
+            x, y, ancho, alto = (int(float(v)) for v in c[6:10])
+            confianza = float(c[10])
+        except ValueError:
+            continue
+        texto = '\t'.join(c[11:]).strip()
+        if texto and confianza >= 0 and ancho > 0 and alto > 0:
+            palabras.append((x, y, x + ancho, y + alto, texto, tuple(c[1:5])))
+    return palabras
+
+
+def _mediana(valores, defecto):
+    v = sorted(valores)
+    return v[len(v) // 2] if v else defecto
+
+
+def texto_por_columnas(palabras):
+    """Una línea por fila de la página y cada palabra en la columna que le toca por su posición: así una
+    fila de la tabla («SALUD … 350.000») queda en una sola línea y los valores, debajo de sus encabezados."""
+    if not palabras:
+        return ''
+    altura = _mediana([p[3] - p[1] for p in palabras if len(p[4]) > 1], 30)
+    ancho = _mediana([(p[2] - p[0]) / len(p[4]) for p in palabras if len(p[4]) >= 3], altura * 0.5) or 1
+    # Tesseract agrupa las palabras en líneas, pero una fila de tabla puede quedar partida en varios bloques
+    # (una línea por celda): se juntan las líneas que están a la misma altura.
+    lineas = {}
+    for p in palabras:
+        lineas.setdefault(p[5], []).append(p)
+    filas = []
+    for grupo in sorted(lineas.values(), key=lambda g: _mediana([(p[1] + p[3]) / 2 for p in g], 0)):
+        grandes = [p for p in grupo if p[3] - p[1] >= altura * 0.4] or grupo   # sin guiones ni comas sueltas
+        centro = _mediana([(p[1] + p[3]) / 2 for p in grandes], 0)
+        alto = _mediana([p[3] - p[1] for p in grandes], altura)
+        fila = next((f for f in reversed(filas) if abs(f['centro'] - centro) <= max(f['alto'], alto) * 0.5), None)
+        if fila:
+            fila['palabras'] += grupo
+        else:
+            filas.append({'centro': centro, 'alto': alto, 'palabras': list(grupo)})
+    izquierda = min(p[0] for p in palabras)
+    salida = []
+    for fila in sorted(filas, key=lambda f: f['centro']):
+        linea = ''
+        for p in sorted(fila['palabras'], key=lambda p: p[0]):
+            columna = round((p[0] - izquierda) / ancho)
+            linea = linea.ljust(max(columna, len(linea) + 1) if linea else columna) + p[4]
+        salida.append(linea)
+    return '\n'.join(salida)
+
+
+# Letras que el OCR pone en lugar de dígitos dentro de un monto o una fecha («2.OOO.OOO», «2O26-1O-O5»).
+DIGITOS_OCR = str.maketrans({'O': '0', 'o': '0', 'D': '0', 'Q': '0', 'I': '1', 'l': '1', '|': '1', 'S': '5', 'B': '8'})
+FORMA_NUMERICA = re.compile(r'\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?|(?:20\d\d[-/.]\d\d(?:[-/.]\d\d)?)|\d\d[-/.]\d\d[-/.]20\d\d')
+
+
+def _digitos(m):
+    token = m.group(0)
+    cambiado = token.translate(DIGITOS_OCR)
+    return cambiado if any(c.isdigit() for c in token) and FORMA_NUMERICA.fullmatch(cambiado) else token
+
+
+def limpiar_ocr(texto):
+    """Confusiones típicas del OCR en las planillas. Cada cambio conserva el largo (las columnas no se mueven)."""
+    salida = []
+    for linea in (texto or '').splitlines():
+        linea = re.sub(r'(?:[.·…_]\s?){3,}', lambda m: ' ' * len(m.group(0)), linea)        # puntos guía «Salud .......»
+        linea = re.sub(r'(?<![\w$])[sS§](?=\s?\d{1,3}(?:[.,]\d{3})+(?!\d))', '$', linea)     # «s 448.000» = «$ 448.000»
+        linea = re.sub(r'(?<![\w$])[sS][oO0](?!\w)', '$0', linea)                              # «so» = «$0»
+        linea = re.sub(r'(?<!\w)[\dOoDQIl|SB][\dOoDQIl|SB.,/-]{3,}', _digitos, linea)
+        linea = re.sub(r'(\d[.,]) (\d{3})(?!\d)', r'\1\2 ', linea)                              # «250. 000»
+        linea = re.sub(r'\b[1I][8B]C\b', 'IBC', linea)                                          # «1BC», «18C»
+        linea = re.sub(r'\b(N\s?)[*”“"\'’º](?=\s)', r'\1°', linea)                             # «N* de planilla», «N” de …»
+        linea = re.sub(r'\bN[eE](?=\s+\d{6,12}\b)', 'N°', linea)                                 # «Planilla Ne 5512345678»
+        salida.append(linea)
+    return '\n'.join(salida)
+
+
+def textos_de_ocr(paginas):
+    """paginas: [{'tsv'}] de Tesseract (una por página) → [texto por columnas]. Un número que el navegador no
+    pudo confirmar al releerlo llega tachado («########») y no se usa."""
+    return [limpiar_ocr('\n'.join(texto_por_columnas(palabras_de_tsv(p.get('tsv'))) for p in paginas))]
 
 
 # ===== 4. Búsqueda de campos =====
@@ -389,10 +502,10 @@ def buscar_valores(lineas, ibc_dado=None):
             for j in (i + 1, i + 2, i + 3, i + 4):
                 if j >= len(lineas):
                     break
+                if claves_en(lineas[j]):
+                    break    # una línea con sus propios rótulos («Salud: $ … Pensión: $ …») no es la de valores
                 valores = montos_en(lineas[j], con_ceros=True)
                 if len(valores) < 2:
-                    if claves_en(lineas[j]):
-                        break
                     continue
                 rotulo = lineas[j][:valores[0][1]]
                 if ETQ_IBC.search(rotulo):          # tabla transpuesta: fila «IBC» antes de la de valores
@@ -410,7 +523,8 @@ def buscar_valores(lineas, ibc_dado=None):
                         pares.append((col, v))
                 for (k, _, _), v in pares:
                     if k in candidatos:
-                        candidatos[k].append((v[0], 'encabezado'))
+                        if v[0] != ibc_dado:   # el IBC no es el aporte de nadie (un pensionado tiene «$ 0» al lado)
+                            candidatos[k].append((v[0], 'encabezado'))
                     elif k == 'ibc' and v[0]:
                         ibc_etiquetado.append(v[0])
                     elif k == 'total' and v[0]:
@@ -500,11 +614,14 @@ def analizar_texto(texto, pistas=None):
     periodos = buscar_periodos(lineas)
     ibc_guia = ibc or ((pistas or {}).get('ibc') or None)
     valores = {k: elegir(candidatos[k], k, ibc_guia) for k in SUBSISTEMAS}
+    plano = '\n'.join(lineas)
+    pensionado = bool(re.search(r'\bPENSIONAD[OA]\b', plano))
     if ibc_guia:
         for k in ('salud', 'pension', 'arl'):
             # Si lo leído no corresponde a la tarifa (p. ej. se tomó el IBC) y en el documento hay un único
             # monto que sí corresponde, ese es el aporte. Un pensionado (pensión 0) no se toca.
-            if valores[k] is None or (valores[k] != 0 and not coherente(valores[k], k, ibc_guia)):
+            cero = valores[k] == 0 and (k != 'pension' or pensionado)
+            if valores[k] is None or (not cero and not coherente(valores[k], k, ibc_guia)):
                 usados = {v for kk, v in valores.items() if v and kk != k} | {ibc_guia}
                 hallado = por_tarifa(lineas, k, ibc_guia, usados)
                 if hallado is not None:
@@ -514,8 +631,7 @@ def analizar_texto(texto, pistas=None):
             valores['ccf'] = None
         if valores['fsp'] and valores['fsp'] > ibc_guia * 0.025:
             valores['fsp'] = None
-    plano = '\n'.join(lineas)
-    if valores['pension'] is None and re.search(r'\bPENSIONAD[OA]\b', plano):
+    if valores['pension'] is None and pensionado:
         valores['pension'] = 0
     operador = next((nombre for nombre, p in OPERADORES if re.search(p, plano)), None)
     return {
@@ -577,7 +693,7 @@ def avisos_de(r, pistas=None):
               'pension': 'el valor de pensión', 'arl': 'el valor de ARL'}
     no_hallados = [t for k, t in faltan.items() if r.get(k) is None]
     if no_hallados:
-        avisos.append('No se encontró ' + ', '.join(no_hallados[:-1]) + (' ni ' if len(no_hallados) > 1 else '') + no_hallados[-1] + ': escríbelo a mano.')
+        avisos.append(('No se pudo leer con seguridad ' if r.get('ocr') else 'No se encontró ') + ', '.join(no_hallados[:-1]) + (' ni ' if len(no_hallados) > 1 else '') + no_hallados[-1] + ': escríbelo a mano.')
     ibc = r.get('ibc')
     if ibc:
         if r.get('salud') and not cerca(r['salud'], ibc * TARIFA_SALUD):
@@ -607,37 +723,151 @@ def avisos_de(r, pistas=None):
     return avisos
 
 
+AVISO_OCR = ('La planilla es escaneada y se leyó con reconocimiento de texto (OCR): los valores se comprobaron con las '
+             'tarifas, pero compara el número de planilla y la fecha de pago con el documento.')
+
+
+def _mes(iso):
+    return int(iso[:4]) * 12 + int(iso[5:7]) - 1
+
+
+def cuadra_tarifa(v, k, ibc):
+    """Más estricto que coherente(), para lo leído con OCR: PILA sube cada aporte al múltiplo de 100
+    siguiente, así que el valor es múltiplo de 100 y queda a menos de 100 pesos de la tarifa."""
+    return v is not None and v % 100 == 0 and any(abs(v - e) < 100 for e in esperado(k, ibc))
+
+
+def validar_ocr(r, textos, pistas=None):
+    """El OCR confunde dígitos (5, 6, 8, 3…), así que de lo leído solo queda lo que se puede comprobar: cada
+    aporte cuadra con su tarifa sobre un IBC confirmado (el de la planilla, el de la fila o el que comparten
+    la salud y la pensión), el total es su suma y la fecha de pago cae cerca del período. Lo demás queda
+    vacío para escribirlo a mano."""
+    pistas = pistas or {}
+    try:
+        ibc_fila = float(pistas.get('ibc') or 0)
+    except (TypeError, ValueError):
+        ibc_fila = 0
+    r = dict(r)
+    pensionado = bool(re.search(r'\bPENSIONAD[OA]\b', normalizar('\n'.join(textos))))
+    # El IBC de la planilla sirve de referencia solo si lo confirma la salud o la pensión (la ARL tiene cinco
+    # tarifas: con un IBC mal leído alguna cuadraría por casualidad) o si es el mismo de la fila.
+    if r.get('ibc') and not (any(cuadra_tarifa(r.get(k), k, r['ibc']) for k in ('salud', 'pension')) or (ibc_fila and cerca(r['ibc'], ibc_fila, 0.005))):
+        r['ibc'] = None
+    referencias = [i for i in (r.get('ibc'), ibc_fila) if i]
+    # Sin IBC: el que comparten la salud (12,5 %) y la pensión (16 %, o 17 % con el fondo de solidaridad).
+    if r.get('salud') and r.get('pension'):
+        for tarifa in (TARIFA_PENSION, TARIFA_PENSION + TARIFA_FSP):
+            desde = max((r['salud'] - 100) / TARIFA_SALUD, (r['pension'] - 100) / tarifa)
+            hasta = min((r['salud'] + 100) / TARIFA_SALUD, (r['pension'] + 100) / tarifa)
+            if desde < hasta:
+                referencias.append((desde + hasta) / 2)
+    for k in SUBSISTEMAS:
+        v = r.get(k)
+        if v is None:
+            continue
+        if v == 0:
+            bien = k == 'pension' and pensionado
+        elif k in ('salud', 'pension', 'arl'):
+            bien = any(cuadra_tarifa(v, k, i) for i in referencias)
+        else:   # fondo de solidaridad (1 % a 2 %) o caja (0,6 % o 2 %)
+            bien = v % 100 == 0 and any(0.005 * i <= v <= 0.021 * i for i in referencias)
+        if not bien:
+            r[k] = None
+    # El total solo si es la suma de lo que quedó (el leído u otro monto del documento que lo sea).
+    suma = sum(r.get(k) or 0 for k in SUBSISTEMAS)
+    completos = all(r.get(k) is not None for k in ('salud', 'pension', 'arl'))
+    if not (completos and r.get('total') and abs(r['total'] - suma) <= 100):
+        iguales = sorted({v for t in textos for linea in preparar(t) for v, *_ in montos_en(linea) if abs(v - suma) <= 100}) if completos else []
+        r['total'] = iguales[0] if iguales else None
+    hoy = datetime.date.today()
+    for k in ('periodoPension', 'periodoSalud'):
+        if r.get(k) and not 2000 <= int(r[k][:4]) <= hoy.year + 1:
+            r[k] = None
+    try:
+        anio, mes = int(pistas.get('anio') or 0), int(pistas.get('mes') or 0)
+    except (TypeError, ValueError):
+        anio = mes = 0
+    periodo = f'{anio:04d}-{mes:02d}' if anio and 1 <= mes <= 12 else (r.get('periodoPension') or r.get('periodoSalud'))
+    fecha = r.get('fechaPago')
+    if fecha:
+        # Se paga en el mes del período o en los siguientes (con un margen); nunca en el futuro.
+        if datetime.date.fromisoformat(fecha) > hoy + datetime.timedelta(days=1) or (periodo and not -1 <= _mes(fecha) - _mes(periodo) <= 3):
+            r['fechaPago'] = None
+    return r
+
+
+def resultado(textos, pistas=None, ocr=False):
+    """Del texto de la planilla (del PDF o del OCR) al dict de respuesta."""
+    if ocr:
+        r = combinar([validar_ocr(analizar_texto(t, pistas), textos, pistas) for t in textos])
+        r['ocr'] = True
+    else:
+        r = combinar([analizar_texto(t, pistas) for t in textos])
+    if all(r.get(k) is None for k in CAMPOS_PRINCIPALES):
+        donde = 'la imagen escaneada' if ocr else 'el PDF'
+        return {'ok': False, 'error': 'sin-datos', 'mensaje': f'No se reconoció una planilla de seguridad social en {donde}', **r}
+    return {'ok': True, **r, 'avisos': ([AVISO_OCR] if ocr else []) + avisos_de(r, pistas)}
+
+
 def leer_planilla(datos, pistas=None):
-    """Lee el PDF y devuelve un dict listo para JSON. Nunca lanza: los problemas van en 'error'."""
+    """Lee el PDF y devuelve un dict listo para JSON. Nunca lanza: los problemas van en 'error'.
+    'sin-texto' (o 'sin-datos' con 'escaneada') le indica al navegador que pruebe con OCR."""
     try:
         textos = textos_de_pdf(datos)
     except ErrorLectura as e:
         return {'ok': False, 'error': e.codigo, 'mensaje': str(e)}
     if sum(len(re.sub(r'\s', '', t)) for t in textos) < 40:
         return {'ok': False, 'error': 'sin-texto', 'mensaje': 'El PDF no tiene texto (¿es una imagen escaneada?)'}
-    r = combinar([analizar_texto(t, pistas) for t in textos])
-    if all(r.get(k) is None for k in CAMPOS_PRINCIPALES):
-        return {'ok': False, 'error': 'sin-datos', 'mensaje': 'No se reconoció una planilla de seguridad social en el PDF', **r}
-    return {'ok': True, **r, 'avisos': avisos_de(r, pistas)}
+    r = resultado(textos, pistas)
+    if not r['ok'] and tiene_imagenes(datos):
+        r['escaneada'] = True
+    return r
 
 
-def leer_planilla_json(datos, pistas_json='{}'):
-    """Para Pyodide: recibe bytes (o un memoryview) y pistas en JSON; devuelve el resultado en JSON."""
+def leer_ocr(paginas, pistas=None):
+    """Como leer_planilla, pero con lo que reconoció Tesseract: [{'tsv'}] por página."""
+    textos = textos_de_ocr(paginas or [])
+    if sum(len(re.sub(r'\s', '', t)) for t in textos) < 40:
+        return {'ok': False, 'error': 'sin-datos', 'ocr': True, 'mensaje': 'El OCR no encontró texto en la planilla escaneada'}
+    return resultado(textos, pistas, ocr=True)
+
+
+def _json(funcion, entrada, pistas_json):
     try:
         pistas = json.loads(pistas_json or '{}')
     except ValueError:
         pistas = {}
     try:
-        return json.dumps(leer_planilla(datos, pistas), ensure_ascii=False)
+        return json.dumps(funcion(entrada, pistas), ensure_ascii=False)
     except Exception as e:  # un PDF raro no debe dejar al navegador sin respuesta
         return json.dumps({'ok': False, 'error': 'interno', 'mensaje': f'Error leyendo la planilla: {e}'}, ensure_ascii=False)
+
+
+def leer_planilla_json(datos, pistas_json='{}'):
+    """Para Pyodide: recibe bytes (o un memoryview) y pistas en JSON; devuelve el resultado en JSON."""
+    return _json(leer_planilla, datos, pistas_json)
+
+
+def leer_ocr_json(paginas_json, pistas_json='{}'):
+    """Para Pyodide: las páginas del OCR y las pistas en JSON; devuelve el resultado en JSON."""
+    return _json(lambda p, pistas: leer_ocr(json.loads(p or '[]'), pistas), paginas_json, pistas_json)
 
 
 # ===== 6. Uso desde la terminal =====
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('Uso: python3 py/leer_planilla.py planilla.pdf [--texto]', file=sys.stderr)
+        print('Uso: python3 py/leer_planilla.py planilla.pdf [--texto]\n'
+              '     python3 py/leer_planilla.py --tsv pagina1.tsv [pagina2.tsv] [--texto]   (salida TSV de Tesseract)', file=sys.stderr)
         sys.exit(2)
+    if sys.argv[1] == '--tsv':
+        paginas = []
+        for ruta in [a for a in sys.argv[2:] if not a.startswith('--')]:
+            with open(ruta, encoding='utf-8') as archivo:
+                paginas.append({'tsv': archivo.read()})
+        if '--texto' in sys.argv:
+            print(f'===== columnas =====\n{textos_de_ocr(paginas)[0]}')
+        print(json.dumps(leer_ocr(paginas), ensure_ascii=False, indent=2))
+        sys.exit(0)
     with open(sys.argv[1], 'rb') as archivo:
         contenido = archivo.read()
     if '--texto' in sys.argv:
