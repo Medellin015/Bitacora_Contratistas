@@ -21,10 +21,14 @@ los tokens de tema, componentes y animaciones.
 | `js/flujos.js` | Llamadas a los flujos de Power Automate: subir archivo, notificar, Word → PDF (`window.Flujos`). |
 | `js/informe-docx.js` | Generador del informe mensual en Word con docx.js (`window.InformeDocx`). |
 | `js/descargas.js` | Word, Excel (con plan B en CSV) y vista previa (`window.Descargas`). |
+| `js/lector-planilla.js` | Lector de planillas de seguridad social: al adjuntar el PDF corre Python en el navegador (Pyodide + pypdf en un Web Worker) y devuelve número, fecha y valores (`window.LectorPlanilla`). |
+| `js/lector-planilla-worker.js` | El Web Worker del lector: carga Pyodide, pypdf (verificado con sha256) y `py/leer_planilla.py`. |
 | `js/ui-base.jsx` … `js/app.jsx` | Interfaz React: componentes base, acceso, layout, motor de formularios, pantallas por rol y raíz de la app. |
 | `firestore.rules` | Reglas de seguridad de Firestore por rol. |
 | `firestore.indexes.json` | Índices compuestos que necesitan las consultas de envíos y solicitudes. |
 | `firebase.json` | Configuración para publicar reglas e índices con la CLI de Firebase. |
+| `py/leer_planilla.py` | Lector en Python de la planilla PILA en PDF. Corre en el navegador (Pyodide) y también en la terminal. |
+| `py/probar_leer_planilla.py` | Pruebas del lector con textos de planillas ficticias (`python3 py/probar_leer_planilla.py`). |
 | `docs/flujos.md` | Contrato y paso a paso de los flujos de Power Automate (`subirArchivo`, `notificar`, `docxAPdf`). |
 
 Los `.jsx` comparten el ámbito global (constantes de primer nivel), por eso el
@@ -75,6 +79,39 @@ no toca los ya sembrados. Cuando una plantilla base sube de versión, el inicio
 del administrador y **Formularios** muestran «Hay una versión nueva…» con el
 botón **Actualizar**, que la publica como versión nueva. Las respuestas se
 guardan por id de pregunta, así que envíos y borradores siguen sirviendo.
+
+### Lector de planillas de seguridad social
+
+En la cuenta de cobro, al adjuntar el PDF de la planilla en **Planillas
+pagadas**, la app la lee y llena esa fila: número de planilla, fecha de pago y
+lo pagado en salud, pensión y ARL. Los valores quedan como escritos a mano (se
+pueden corregir y «Usar lo obligatorio» los vuelve a enlazar) y debajo del PDF
+se ve qué se tomó, con avisos si el período o el IBC de la planilla no
+coinciden con los de la fila, o si la suma no da el total.
+
+- **Cómo lee**: `py/leer_planilla.py` corre con **Pyodide** (Python compilado a
+  WebAssembly) dentro de un Web Worker. Extrae el texto con **pypdf** y combina
+  tres lecturas (fila por subsistema, encabezado con los valores debajo y
+  «etiqueta: valor») revisadas contra las tarifas (12,5 % salud, 16 % pensión,
+  clases de riesgo ARL) y el total. Lo que no encuentra lo deja vacío.
+- **Privacidad**: el PDF no sale del navegador de la persona; no hay servidor.
+- **Red**: la primera vez descarga unos 10 MB de `cdn.jsdelivr.net` (Pyodide
+  0.29.5) y `files.pythonhosted.org` (pypdf 6.19.0, verificado con sha256); luego
+  quedan en la caché del navegador. Si la red los bloquea, la app lo avisa y la
+  persona escribe los valores a mano como antes. Las planillas cifradas con
+  AES cargan además pycryptodome desde el mismo CDN de Pyodide.
+- **No lee** PDF escaneados (imágenes sin texto) ni planillas con contraseña de
+  apertura: lo dice y se escriben a mano.
+- **Plantilla**: se activa con `lector`, `llenar` y `pistas` en la pregunta
+  ARCHIVO (cuenta de cobro versión 5). En una instalación que ya tenía la
+  versión 4, el administrador la publica con **Formularios → Actualizar**.
+- **En la terminal**, para revisar una planilla:
+
+  ```bash
+  pip install pypdf==6.19.0
+  python3 py/leer_planilla.py planilla.pdf          # agrega --texto para ver lo que extrae pypdf
+  python3 py/probar_leer_planilla.py                # pruebas (no necesitan pypdf)
+  ```
 
 ### Cuentas: nadie se registra ni activa nada
 
