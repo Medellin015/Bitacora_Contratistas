@@ -99,6 +99,27 @@ ARL
 SURA
 10.500
 """
+# Formato «Autoliquidación consolidada» (Enlace Operativo / SuAporte): todos los subsistemas en UNA fila, cada
+# uno con su IBC antes del aporte; la parte de riesgos no dice «ARL»; la fecha va en el sello «PAGADO dd/mm/aaaa».
+AUTOLIQUIDACION_CONSOLIDADA = """
+                                                                                     SuAporte                         |             AUTOLIQUIDACION
+                                                                                                                                       CONSOLIDADA
+              Fecha creación reporte:           2026-10-15, 06:25:35 PM              Tipo Planilla:                 I: PLANILLA INDEPENDIENTES                Numéro Planilla:            77700011
+                                                                                     Periodo Cotización:             septiembre de 2026            Periodo Servicio:            septiembre de 2026
+                                                                                                                PAGADO 05/10/2026
+ I. DATOS DEL APORTANTE
+ Razón Social                            CONTRATISTA DE PRUEBA
+ Documento                               CC1000000003
+ Total Afiliados                         1                                                                                                                    ARP                                 POSITIVA DE SEGUROS
+ II. DETALLE DEL APORTANTE
+              Datos del Afiliado                                          Novedades                                      Pensiones                                         Salud                                 Riesgos                                  Cajas                                  Parafiscales                    Total
+  Identificación  Apellidos y Nombres     Tipo   Subtipo                                                         Administradora      IBC       Aporte         Administradora         IBC       Aporte      Tarifa       IBC      Aporte        Administradora        IBC      Aporte    Aporte    Aporte     ESAP     Aporte       Total
+CC 1000000003 CONTRATISTA DE PRUEBA       59       00                                            0 303030  0 (230201) PROTECCION   $ 2.800.000 $ 448.000(EPS010) EPS SURA          $ 2.800.000 $ 350.000    0,522    $ 2.800.000 $ 14.700(NIN-CC) NINGUNA CCF            $ 0       $ 0       $ 0       $ 0       $ 0       $ 0      $ 812.700
+     III.TOTALES
+       IBC Pensión        IBC Salud       IBC Riesgos        IBC Cajas       Aportes Pensión      Aportes Salud    Aportes Riesgos   Aportes Cajas     Aportes Sena      Aportes ICBF         ESAP         Min Educación     Licencias, Saldos        ARP         INTERESES DE        INTERESES      TOTAL FINAL
+           $ 2.800.000       $ 2.800.000      $ 2.800.000              $ 0             $ 448.000         $ 350.000         $ 14.700               $ 0              $ 0               $ 0              $ 0               $ 0                 $ 0               $ 0        $ 812.700               $ 0      $ 812.700
+           Enlace Operativo – Línea Expertos en PILA
+"""
 RECIBO_PSE = """
 Comprobante de pago PSE
 Valor pagado: $ 580.500
@@ -143,6 +164,13 @@ class Analisis(unittest.TestCase):
 
     def test_una_celda_por_linea_usa_la_tarifa_sobre_el_ibc(self):
         self.revisar(CELDA_POR_LINEA, {'numeroPlanilla': '3312345678', 'ibc': 2000000, 'salud': 250000, 'pension': 320000, 'arl': 10500})
+
+    def test_autoliquidacion_consolidada_en_una_fila(self):
+        r = self.revisar(AUTOLIQUIDACION_CONSOLIDADA, {'numeroPlanilla': '77700011', 'fechaPago': '2026-10-05', 'periodoPension': '2026-09',
+                                                      'periodoSalud': '2026-09', 'ibc': 2800000, 'salud': 350000, 'pension': 448000,
+                                                      'arl': 14700, 'total': 812700, 'operador': 'Enlace Operativo'})
+        self.assertIsNone(r['ccf'])
+        self.assertEqual(L.avisos_de(r, {'ibc': 2800000, 'anio': 2026, 'mes': 9}), [])
 
     def test_recibo_que_no_es_planilla_no_inventa_valores(self):
         r = L.analizar_texto(RECIBO_PSE)
