@@ -267,7 +267,7 @@ def claves_en(linea):
     return sorted(salida, key=lambda x: x[1])
 
 
-def valor_cerca(lineas, i, etiqueta, buscar, ventana=40):
+def valor_cerca(lineas, i, etiqueta, buscar, ventana=60):
     """Valor de una etiqueta: a su derecha en la misma línea (antes de otra etiqueta) o debajo, en su columna."""
     linea = lineas[i]
     tramo = linea[etiqueta.end():etiqueta.end() + ventana]
@@ -305,6 +305,9 @@ def buscar_numero(lineas):
     return None
 
 
+ETQ_PAGADO = re.compile(r'\bPAGAD[AO]\b\s*(?:EL\s+)?:?\s*')
+
+
 def buscar_fecha_pago(lineas):
     for i, linea in enumerate(lineas):
         for m in ETQ_FECHA_PAGO.finditer(linea):
@@ -314,6 +317,12 @@ def buscar_fecha_pago(lineas):
             v = valor_cerca(lineas, i, m, fechas_en)
             if v:
                 return v
+    # «PAGADO 05/10/2026» (sello del comprobante): solo si la fecha va pegada a la palabra.
+    for linea in lineas:
+        for m in ETQ_PAGADO.finditer(linea):
+            pegada = [f for f in fechas_en(linea[m.end():m.end() + 30]) if f[1] == 0]
+            if pegada:
+                return pegada[0][0]
     return None
 
 
@@ -321,7 +330,7 @@ def buscar_periodos(lineas):
     periodos = {}
     for i, linea in enumerate(lineas):
         for m in ETQ_PERIODO.finditer(linea):
-            v = valor_cerca(lineas, i, m, periodos_en, ventana=30)
+            v = valor_cerca(lineas, i, m, periodos_en, ventana=50)
             if not v:
                 continue
             tipo = m.group(1) or ''
@@ -344,8 +353,9 @@ def buscar_total(lineas):
     return max(mejores) if mejores else None
 
 
-def buscar_valores(lineas):
-    """Candidatos por subsistema con su origen: filas, pares en línea y encabezados con valores debajo."""
+def buscar_valores(lineas, ibc_dado=None):
+    """Candidatos por subsistema con su origen: filas, pares en línea y encabezados con valores debajo.
+    ibc_dado: el IBC ya calculado para todo el documento; se salta al tomar el aporte de cada subsistema."""
     candidatos = {k: [] for k in SUBSISTEMAS}
     ibc_etiquetado, montos_por_fila, totales = [], [], []
     for i, linea in enumerate(lineas):
@@ -366,10 +376,11 @@ def buscar_valores(lineas):
             despues = [x for x in montos if x[1] >= ultimo_clave] or montos
             montos_por_fila.append((distintos[0], despues))
         elif len(distintos) >= 2 and montos:
-            # Pares en la misma línea: «Salud: $ 250.000    Pensión: $ 320.000».
+            # Pares en la misma línea: «Salud: $ 250.000    Pensión: $ 320.000», o una fila con todos los
+            # subsistemas: «PROTECCION $ 2.800.000 $ 448.000 EPS SURA $ 2.800.000 $ 350.000 …» (el IBC se salta).
             for n, (k, ini, fin) in enumerate(claves):
-                limite = claves[n + 1][1] if n + 1 < len(claves) else len(linea)
-                entre = [x for x in montos if fin <= x[1] < limite]
+                limite = min(claves[n + 1][1] if n + 1 < len(claves) else len(linea), fin + 60)
+                entre = [x for x in montos if fin <= x[1] < limite and x[0] != ibc_dado]
                 if entre:
                     candidatos[k].append((entre[0][0], 'linea'))
         elif len(distintos) >= 2 and not montos:
@@ -405,8 +416,8 @@ def buscar_valores(lineas):
                     elif k == 'total' and v[0]:
                         totales.append(v[0])
                 break
-    # IBC: el etiquetado o el monto que se repite en las filas de dos o más subsistemas.
-    ibc = ibc_etiquetado[0] if ibc_etiquetado else None
+    # IBC: el dado, el etiquetado o el monto que se repite en las filas de dos o más subsistemas.
+    ibc = ibc_dado or (ibc_etiquetado[0] if ibc_etiquetado else None)
     if ibc is None and len(montos_por_fila) >= 2:
         conteo = {}
         for k, montos in montos_por_fila:
@@ -420,7 +431,7 @@ def buscar_valores(lineas):
         if any(x[4] for x in opciones):
             opciones = [x for x in opciones if x[4]] or opciones   # sin separador suele ser un código
         candidatos[k].append((opciones[-1][0], 'fila'))
-    return candidatos, ibc, (max(totales) if totales else None)
+    return candidatos, ibc, (max(totales) if totales else None), ibc_etiquetado
 
 
 def esperado(k, ibc):
@@ -457,18 +468,52 @@ def por_tarifa(lineas, k, ibc, usados):
     return hallados.pop() if len(hallados) == 1 else None
 
 
+def ibc_por_tarifas(lineas, etiquetados, otro=None):
+    """El IBC es el monto que explica los aportes del documento: su 12,5 % (salud), su 16 % (pensión) o su
+    tarifa de ARL también aparecen. Sirve aunque el comprobante no lo rotule (columnas «IBC Pensión»,
+    «IBC Salud»…). Gana el que explique más aportes; luego el etiquetado, el más repetido y el mayor."""
+    todos = [v for linea in lineas for v, *_ in montos_en(linea)]
+    distintos = set(todos)
+    mejor, clave_mejor = None, (0,)
+    for c in {v for v in distintos if v >= 900_000} | set(etiquetados) | ({otro} if otro else set()):
+        puntos = sum(1 for k in ('salud', 'pension', 'arl') if any(v != c and any(cerca(v, e, 0.005) for e in esperado(k, c)) for v in distintos))
+        clave = (puntos, c in etiquetados, todos.count(c), c)
+        if clave > clave_mejor:
+            mejor, clave_mejor = c, clave
+    if mejor is not None and clave_mejor[0] >= 1:
+        return mejor
+    return etiquetados[0] if etiquetados else otro
+
+
+def coherente(v, k, ibc):
+    return v is not None and any(cerca(v, e) for e in esperado(k, ibc))
+
+
 def analizar_texto(texto, pistas=None):
     """Campos de una planilla a partir de su texto (sin pypdf: sirve para probar el análisis).
     pistas: {'ibc': n} — el IBC que calcula la app; solo ayuda a escoger entre candidatos."""
     lineas = preparar(texto)
-    candidatos, ibc, total_columna = buscar_valores(lineas)
+    # Primero el IBC de todo el documento (así se puede saltar en las filas) y luego los candidatos.
+    _, ibc_previo, _, etiquetados = buscar_valores(lineas)
+    ibc = ibc_por_tarifas(lineas, etiquetados, ibc_previo)
+    candidatos, ibc, total_columna, _ = buscar_valores(lineas, ibc)
     periodos = buscar_periodos(lineas)
     ibc_guia = ibc or ((pistas or {}).get('ibc') or None)
     valores = {k: elegir(candidatos[k], k, ibc_guia) for k in SUBSISTEMAS}
     if ibc_guia:
         for k in ('salud', 'pension', 'arl'):
-            if valores[k] is None:
-                valores[k] = por_tarifa(lineas, k, ibc_guia, {v for v in valores.values() if v} | {ibc_guia})
+            # Si lo leído no corresponde a la tarifa (p. ej. se tomó el IBC) y en el documento hay un único
+            # monto que sí corresponde, ese es el aporte. Un pensionado (pensión 0) no se toca.
+            if valores[k] is None or (valores[k] != 0 and not coherente(valores[k], k, ibc_guia)):
+                usados = {v for kk, v in valores.items() if v and kk != k} | {ibc_guia}
+                hallado = por_tarifa(lineas, k, ibc_guia, usados)
+                if hallado is not None:
+                    valores[k] = hallado
+        # Caja y fondo de solidaridad son pequeños frente al IBC: un monto grande ahí es otra columna (un total).
+        if valores['ccf'] and valores['ccf'] > ibc_guia * 0.045:
+            valores['ccf'] = None
+        if valores['fsp'] and valores['fsp'] > ibc_guia * 0.025:
+            valores['fsp'] = None
     plano = '\n'.join(lineas)
     if valores['pension'] is None and re.search(r'\bPENSIONAD[OA]\b', plano):
         valores['pension'] = 0
@@ -480,9 +525,21 @@ def analizar_texto(texto, pistas=None):
         'periodoSalud': periodos.get('salud') or periodos.get('general'),
         'ibc': ibc,
         **valores,
-        'total': buscar_total(lineas) or total_columna,
+        'total': buscar_total(lineas) or total_columna or total_por_suma(lineas, valores),
         'operador': operador,
     }
+
+
+def total_por_suma(lineas, valores):
+    """Sin un total rotulado: el monto del documento que es la suma de los aportes leídos."""
+    suma = sum(valores.get(k) or 0 for k in SUBSISTEMAS)
+    if not suma or any(valores.get(k) is None for k in ('salud', 'arl')):
+        return None
+    for linea in lineas:
+        for v, *_ in montos_en(linea):
+            if abs(v - suma) <= 1000:
+                return v
+    return None
 
 
 # ===== 5. Coherencia y resultado =====
