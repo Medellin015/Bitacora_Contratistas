@@ -197,6 +197,17 @@ def numeros_planilla_en(texto):
     return [(m.group(1), m.start(1), m.end(1)) for m in re.finditer(r'(?<![\d.,/-])(\d{6,12})(?![\d.,/-]\d|\d)', texto)]
 
 
+# Dígito que el navegador no pudo confirmar al releer un número con OCR (js/lector-planilla.js lo tacha así).
+TACHADO = '■'
+
+
+def numeros_o_tachados(texto):
+    """Como numeros_planilla_en, pero un número tachado también ocupa su lugar (vale «?»): así, si el de la
+    planilla no se pudo leer con seguridad, no se toma en su lugar el número de al lado (una cédula)."""
+    tachados = [('?', m.start(), m.end()) for m in re.finditer(f'{TACHADO}{{6,12}}', texto)]
+    return sorted(numeros_planilla_en(texto) + tachados, key=lambda x: x[1])
+
+
 # ===== 3. Texto del PDF y del OCR =====
 class ErrorLectura(Exception):
     """codigo: 'no-pdf' | 'clave' | 'cifrado' (falta pycryptodome) | 'sin-texto'."""
@@ -257,8 +268,8 @@ def textos_de_pdf(datos, max_paginas=5, _reintento=True):
 
 
 def tiene_imagenes(datos, max_paginas=5):
-    """¿Alguna de las primeras páginas trae imágenes? (una planilla escaneada a la que el escáner le puso
-    una capa de texto que no sirve: vale la pena pasarla por OCR)."""
+    """¿Alguna de las primeras páginas trae una imagen del tamaño de una hoja escaneada (no un logo)? Una
+    planilla escaneada a la que el escáner le puso una capa de texto que no sirve: vale la pena el OCR."""
     try:
         from pypdf import PdfReader
         lector = PdfReader(io.BytesIO(bytes(datos)))
@@ -266,8 +277,10 @@ def tiene_imagenes(datos, max_paginas=5):
             return False
         for pagina in lector.pages[:max_paginas]:
             objetos = (pagina.get('/Resources') or {}).get('/XObject') or {}
-            if any(objetos[k].get_object().get('/Subtype') == '/Image' for k in objetos):
-                return True
+            for k in objetos:
+                o = objetos[k].get_object()
+                if o.get('/Subtype') == '/Image' and int(o.get('/Width', 0)) * int(o.get('/Height', 0)) >= 1_000_000:
+                    return True
     except Exception:  # si no se puede saber, no se insiste
         return False
     return False
@@ -350,7 +363,7 @@ def limpiar_ocr(texto):
         linea = re.sub(r'(?<![\w$])[sS§](?=\s?\d{1,3}(?:[.,]\d{3})+(?!\d))', '$', linea)     # «s 448.000» = «$ 448.000»
         linea = re.sub(r'(?<![\w$])[sS][oO0](?!\w)', '$0', linea)                              # «so» = «$0»
         linea = re.sub(r'(?<!\w)[\dOoDQIl|SB][\dOoDQIl|SB.,/-]{3,}', _digitos, linea)
-        linea = re.sub(r'(\d[.,]) (\d{3})(?!\d)', r'\1\2 ', linea)                              # «250. 000»
+        linea = re.sub(r'(\d[.,]) (\d{3})(?![\d.,])', r'\1\2 ', linea)                          # «250. 000»
         linea = re.sub(r'\b[1I][8B]C\b', 'IBC', linea)                                          # «1BC», «18C»
         linea = re.sub(r'\b(N\s?)[*”“"\'’º](?=\s)', r'\1°', linea)                             # «N* de planilla», «N” de …»
         linea = re.sub(r'\bN[eE](?=\s+\d{6,12}\b)', 'N°', linea)                                 # «Planilla Ne 5512345678»
@@ -360,7 +373,7 @@ def limpiar_ocr(texto):
 
 def textos_de_ocr(paginas):
     """paginas: [{'tsv'}] de Tesseract (una por página) → [texto por columnas]. Un número que el navegador no
-    pudo confirmar al releerlo llega tachado («########») y no se usa."""
+    pudo confirmar al releerlo llega tachado («■■■■■■■■») y no se usa."""
     return [limpiar_ocr('\n'.join(texto_por_columnas(palabras_de_tsv(p.get('tsv'))) for p in paginas))]
 
 
@@ -412,8 +425,8 @@ ETQ_TOTAL = re.compile(r'TOTAL\s*(?:PAGADO|A\s+PAGAR|APORTES|PLANILLA|TRANSACCIO
 def buscar_numero(lineas):
     for i, linea in enumerate(lineas):
         for m in ETQ_PLANILLA.finditer(linea):
-            v = valor_cerca(lineas, i, m, numeros_planilla_en)
-            if v:
+            v = valor_cerca(lineas, i, m, numeros_o_tachados)
+            if v and v != '?':
                 return v
     return None
 
@@ -502,10 +515,13 @@ def buscar_valores(lineas, ibc_dado=None):
             for j in (i + 1, i + 2, i + 3, i + 4):
                 if j >= len(lineas):
                     break
-                if claves_en(lineas[j]):
+                rotulos = {k for k, _, _ in claves_en(lineas[j])}
+                if len(rotulos) >= 2:
                     break    # una línea con sus propios rótulos («Salud: $ … Pensión: $ …») no es la de valores
                 valores = montos_en(lineas[j], con_ceros=True)
                 if len(valores) < 2:
+                    if rotulos:
+                        break
                     continue
                 rotulo = lineas[j][:valores[0][1]]
                 if ETQ_IBC.search(rotulo):          # tabla transpuesta: fila «IBC» antes de la de valores
@@ -819,8 +835,8 @@ def leer_planilla(datos, pistas=None):
     if sum(len(re.sub(r'\s', '', t)) for t in textos) < 40:
         return {'ok': False, 'error': 'sin-texto', 'mensaje': 'El PDF no tiene texto (¿es una imagen escaneada?)'}
     r = resultado(textos, pistas)
-    if not r['ok'] and tiene_imagenes(datos):
-        r['escaneada'] = True
+    if not r['ok'] and sum(len(re.sub(r'\s', '', t)) for t in textos) < 600 and tiene_imagenes(datos):
+        r['escaneada'] = True    # poco texto sobre una imagen de página completa: probar con OCR
     return r
 
 

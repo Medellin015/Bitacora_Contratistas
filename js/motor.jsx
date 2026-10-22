@@ -208,9 +208,17 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
   // Lectura de la planilla: corre a la par de la subida; si la persona elige otro archivo, la anterior se descarta.
   const [lectura, setLectura] = useState(null);
   const turnoLectura = useRef(0);
+  // La lectura en curso se cancela si se elige otro archivo, se quita o se sale de la pantalla (el OCR de una
+  // escaneada ocupa la máquina varios segundos y la siguiente espera su turno).
+  const lecturaActual = useRef(null);
+  const cancelarLectura = () => { if (lecturaActual.current) { lecturaActual.current.abort(); lecturaActual.current = null; } };
+  useEffect(() => cancelarLectura, []);
   const leePlanillas = !!(lector && window.LectorPlanilla);
   const leerPlanilla = async (archivo) => {
     const turno = ++turnoLectura.current;
+    cancelarLectura();
+    const control = typeof AbortController === 'function' ? new AbortController() : null;
+    lecturaActual.current = control;
     setLectura({ estado: 'leyendo', primera: LectorPlanilla.estado() !== 'listo' });
     let ultimo = '';
     const alAvanzar = (avance) => {
@@ -220,7 +228,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
       setLectura((l) => (l && l.estado === 'leyendo' ? { ...l, avance } : l));
     };
     let r;
-    try { r = await LectorPlanilla.leer(archivo, lector.pistas(), alAvanzar); } catch (e) {
+    try { r = await LectorPlanilla.leer(archivo, lector.pistas(), alAvanzar, control && control.signal); } catch (e) {
       if (turno === turnoLectura.current) setLectura({ estado: 'error', mensaje: MENSAJES_LECTOR[e.code] || e.message });
       return;
     }
@@ -265,7 +273,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
               <Icono nombre="archivo" className="texto-3" />
               <span className="flex-1 min-w-0 truncate">{a.url ? <a href={a.url} target="_blank" rel="noopener noreferrer">{a.nombre}</a> : a.nombre}</span>
               <span className="mono text-xs texto-3">{U.tamanoLegible(a.tamano)}</span>
-              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => { turnoLectura.current++; setLectura(null); onCambio((vigente) => { const l = Array.isArray(vigente) ? vigente : []; const k = l.indexOf(a); return l.filter((_, j) => j !== (k >= 0 ? k : i)); }); }}><Icono nombre="x" tam={14} /></button> : null}
+              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => { turnoLectura.current++; cancelarLectura(); setLectura(null); onCambio((vigente) => { const l = Array.isArray(vigente) ? vigente : []; const k = l.indexOf(a); return l.filter((_, j) => j !== (k >= 0 ? k : i)); }); }}><Icono nombre="x" tam={14} /></button> : null}
             </li>
           ))}
         </ul>

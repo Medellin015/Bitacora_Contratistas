@@ -187,6 +187,7 @@ class Ocr(unittest.TestCase):
                  'PROTECCION s 448.000': 'PROTECCION $ 448.000', 'Cajas so so': 'Cajas $0 $0', '2.OOO.OOO': '2.000.000',
                  'Fecha de pago: 2O26-1O-O5': 'Fecha de pago: 2026-10-05', 'Salud 250. 000': 'Salud 250.000 ',
                  '1BC 18C': 'IBC IBC', 'Salud ............ 250,000.00': 'Salud              250,000.00',
+                 'IBC 2.800.000, 350.000': 'IBC 2.800.000, 350.000',
                  'SOLIDARIDAD EPS SURA BOSQUE S10': 'SOLIDARIDAD EPS SURA BOSQUE S10'}
         for texto, limpio in casos.items():
             self.assertEqual(L.limpiar_ocr(texto), limpio, texto)
@@ -219,8 +220,10 @@ class Ocr(unittest.TestCase):
         self.assertEqual(L.leer_ocr([{'tsv': tsv}], self.PISTAS)['pension'], 0)
 
     def test_numero_que_no_se_pudo_confirmar_no_se_llena(self):
-        # El navegador relee cada número largo y tacha («########») el que no coincide la segunda vez.
-        tsv = consolidada_escaneada().replace('77700011', '########')
+        # El navegador relee cada número largo y tacha («■■■■■■■■») el que no coincide la segunda vez. No se toma
+        # en su lugar el número de al lado ni el de debajo (la cédula).
+        tsv = consolidada_escaneada(extra=' CC 1000000003').replace('77700011', '■■■■■■■■')
+        tsv += '\n' + tsv_de([(190, [(150, 'Identificación CC 1020304050')])]).split('\n', 1)[1]
         r = L.leer_ocr([{'tsv': tsv}], self.PISTAS)
         self.assertIsNone(r['numeroPlanilla'])
         self.assertEqual(r['salud'], 350000)
@@ -277,6 +280,12 @@ class Analisis(unittest.TestCase):
                                                       'arl': 14700, 'total': 812700, 'operador': 'Enlace Operativo'})
         self.assertIsNone(r['ccf'])
         self.assertEqual(L.avisos_de(r, {'ibc': 2800000, 'anio': 2026, 'mes': 9}), [])
+
+    def test_encabezado_y_fila_de_valores_con_el_nombre_de_una_administradora(self):
+        # La fila de valores nombra una administradora («PROTECCION» = pensión), pero sigue siendo la de valores
+        # del encabezado; sin IBC, cada valor va en su columna (no el total como pensión).
+        texto = '\n Pensión         Salud           ARL            Total\n PROTECCION   448.000   350.000   14.700   812.700\n'
+        self.revisar(texto, {'pension': 448000, 'salud': 350000, 'arl': 14700, 'total': 812700})
 
     def test_recibo_que_no_es_planilla_no_inventa_valores(self):
         r = L.analizar_texto(RECIBO_PSE)

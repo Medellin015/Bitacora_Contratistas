@@ -112,8 +112,10 @@ coinciden con los de la fila, o si la suma no da el total.
   planilla se lee dos veces y, si no coincide, queda vacío, y la fecha de pago
   debe caer cerca del período. Lo demás queda vacío con el aviso «No se pudo
   leer con seguridad…». Tarda unos segundos por página; la primera vez descarga
-  unos 8 MB de `cdn.jsdelivr.net` (PDF.js 6.4.299, Tesseract.js 7.0.0 verificado
-  con sha384 y el modelo del español, que queda guardado en el navegador). Con
+  unos 8 MB de `cdn.jsdelivr.net`: PDF.js 6.4.299, Tesseract.js 7.0.0 y el
+  modelo del español, en versiones fijas (el script de Tesseract.js que corre en
+  la página se verifica con sha384) y el modelo queda guardado en el navegador.
+  Si se elige otro archivo mientras lee, la lectura anterior se cancela. Con
   `window.LECTOR_PLANILLA_CONFIG = { ocr: false }` se apaga.
 - **No lee** planillas con contraseña de apertura: lo dice y se escriben a mano.
 - **Plantilla**: se activa con `lector`, `llenar` y `pistas` en la pregunta

@@ -170,7 +170,9 @@ const prepararImagen = ({ rgba, ancho, alto, dpi }) => {
   let g = fondoParejo(aGris(new Uint8ClampedArray(rgba), ancho * alto), ancho, alto);
   const grados = inclinacion(g, ancho, alto, otsu(g));
   if (Math.abs(grados) >= 0.1) ({ g, ancho, alto } = enderezar(g, ancho, alto, grados));
-  borrarLineas(g, ancho, alto, otsu(g), Math.round(dpi * 0.4));
+  // Una línea mide al menos 0,4 pulgadas; si el PDF dice menos resolución de la real (una foto metida en una
+  // página enorme), cuenta el tamaño de la imagen: la hoja ocupa casi toda la foto.
+  borrarLineas(g, ancho, alto, otsu(g), Math.max(Math.round(dpi * 0.4), Math.round(Math.min(ancho, alto) * 0.047)));
   const cabecera = new TextEncoder().encode(`P5\n${ancho} ${alto}\n255\n`);
   const pgm = new Uint8Array(cabecera.length + g.length);
   pgm.set(cabecera);

@@ -10,7 +10,7 @@
      2. Worker: se crea en el primer uso, se reutiliza y se reinicia si se cuelga
      3. OCR de planillas escaneadas: PDF.js dibuja la página, el worker la limpia,
         Tesseract.js reconoce el texto y Python comprueba los valores
-     4. API: LectorPlanilla.leer(archivo, pistas, alAvanzar) · precargar() · estado()
+     4. API: LectorPlanilla.leer(archivo, pistas, alAvanzar, senal) · precargar() · estado()
    Plan B: si la red bloquea cdn.jsdelivr.net o files.pythonhosted.org (o el
    navegador no tiene Web Workers / WebAssembly), leer() rechaza con un mensaje
    claro y la persona escribe los valores a mano, como siempre.
@@ -137,7 +137,7 @@
   };
   // El OCR a veces cambia o corta un dígito de un número largo (el de la planilla, un documento) sin dudarlo.
   // Cada uno se recorta y se vuelve a leer como una sola línea: si la segunda lectura no dice lo mismo, se
-  // tacha («########») y Python no lo usa. Los montos no hacen falta: se comprueban con las tarifas.
+  // tacha («■■■■■■■■») y Python no lo usa. Los montos no hacen falta: se comprueban con las tarifas.
   const NUMERO_LARGO = /(^|[^\d$])(\d{6,12})(?!\d)/;   // sin «lookbehind»: Safari anterior a 16.4 no lo entiende
   const recortarPgm = (pgm, x, y, an, al) => {
     const c = new TextDecoder('latin1').decode(pgm.subarray(0, 32)).match(/^P5\s+(\d+)\s+(\d+)\s+255\s/);
@@ -153,25 +153,26 @@
   const confirmarNumeros = async (ocrWorker, pgm, tsv, unaLinea) => {
     const filas = tsv.split('\n');
     let releidas = 0;
-    for (let i = 0; i < filas.length && releidas < 20; i++) {
+    for (let i = 0; i < filas.length; i++) {
       const c = filas[i].split('\t');
       const m = c[0] === '5' && c.length >= 12 ? c[11].match(NUMERO_LARGO) : null;
       if (!m) continue;
-      releidas++;
       const [x, y, an, al] = c.slice(6, 10).map(Number);
       let igual = false;
-      try {
-        const { data } = await ocrWorker.recognize(recortarPgm(pgm, x - al, y - al / 2, an * 1.6 + 2 * al, al * 2), { tessedit_pageseg_mode: unaLinea }, { text: true });
-        igual = new RegExp(`(^|\\D)${m[2]}(?!\\d)`).test((data && data.text) || '');
-      } catch (e) { /* sin segunda lectura no hay confirmación */ }
+      if (releidas++ < 20) {   // si una página trae más números largos, los demás quedan sin confirmar (tachados)
+        try {
+          const { data } = await ocrWorker.recognize(recortarPgm(pgm, x - al, y - al / 2, an * 1.6 + 2 * al, al * 2), { tessedit_pageseg_mode: unaLinea }, { text: true });
+          igual = new RegExp(`(^|\\D)${m[2]}(?!\\d)`).test((data && data.text) || '');
+        } catch (e) { /* sin segunda lectura no hay confirmación */ }
+      }
       if (!igual) {
-        c[11] = c[11].replace(/\d/g, '#');
+        c[11] = c[11].replace(/\d/g, '■');
         filas[i] = c.join('\t');
       }
     }
     return filas.join('\n');
   };
-  const ocr = async (archivo, pistas, alAvanzar) => {
+  const ocr = async (archivo, pistas, alAvanzar, senal) => {
     const o = CONFIG.ocr;
     let tareaPdf = null;
     let ocrWorker = null;
@@ -181,20 +182,32 @@
     // Tesseract (~100 MB) y el documento de PDF.js se cierran siempre, también si se crean después de un error.
     const cerrar = () => {
       if (ocrWorker) { ocrWorker.terminate().catch(() => {}); ocrWorker = null; }
-      if (tareaPdf) { tareaPdf.destroy(); tareaPdf = null; }
+      if (tareaPdf) { tareaPdf.destroy().catch(() => {}); tareaPdf = null; }
     };
     const trabajo = (async () => {
       avisar({ fase: 'ocr-carga' });
       const [pdf, T] = await Promise.all([cargarPdfjs(), cargarTesseract()]);
+      if (cancelado) return null;
+      // Tesseract.js 7 no rechaza createWorker si falla la descarga del idioma (se queda esperando): el modelo se
+      // pide antes aquí (así queda en la caché del navegador para Tesseract) y cualquier error suyo corta la espera.
+      const idioma = absoluta(o.idioma).replace(/\/$/, '');
+      await fetch(`${idioma}/spa.traineddata.gz`, { cache: 'force-cache' })
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+        .catch((e) => { throw error(`No se pudo descargar el modelo del español: ${e.message}`, 'ocr-carga'); });
+      if (cancelado) return null;
       let pagina = 0;
       let paginas = 1;
       let releyendo = false;   // las relecturas de números no mueven la barra de avance
+      let fallaTesseract;
+      const falla = new Promise((resolve, reject) => { fallaTesseract = reject; });
+      const creando = T.createWorker('spa', T.OEM.LSTM_ONLY, {
+        workerPath: absoluta(`${o.tesseract}worker.min.js`), corePath: absoluta(o.nucleo), langPath: idioma, cachePath: o.cache,
+        logger: (m) => { if (m && m.status === 'recognizing text' && pagina && !releyendo) avisar({ fase: 'ocr', pagina, paginas, progreso: m.progress }); },
+        errorHandler: (e) => fallaTesseract(e),
+      });
+      creando.then((w) => { if (cancelado) w.terminate().catch(() => {}); }, () => {});   // si llega tarde, se cierra
       try {
-        ocrWorker = await T.createWorker('spa', T.OEM.LSTM_ONLY, {
-          workerPath: absoluta(`${o.tesseract}worker.min.js`), corePath: absoluta(o.nucleo), langPath: absoluta(o.idioma), cachePath: o.cache,
-          logger: (m) => { if (m && m.status === 'recognizing text' && pagina && !releyendo) avisar({ fase: 'ocr', pagina, paginas, progreso: m.progress }); },
-          errorHandler: () => {},
-        });
+        ocrWorker = await Promise.race([creando, falla]);
       } catch (e) {
         throw error(`No se pudo iniciar el reconocimiento de texto: ${(e && e.message) || e}`, 'ocr-carga');
       }
@@ -212,7 +225,8 @@
         avisar({ fase: 'ocr', pagina, paginas, progreso: 0 });
         const imagen = await dibujar(await doc.getPage(n));
         const pgm = new Uint8Array((await pedir({ tipo: 'imagen', ...imagen }, 60000, [imagen.rgba])).pgm);
-        const { data } = await ocrWorker.recognize(pgm, { rotateAuto: true }, { text: false, tsv: true });
+        // Sin rotateAuto: el worker ya enderezó la página, y las cajas deben ser las de esta imagen para releer.
+        const { data } = await ocrWorker.recognize(pgm, {}, { text: false, tsv: true });
         releyendo = true;
         leidas.push({ tsv: await confirmarNumeros(ocrWorker, pgm, data.tsv || '', T.PSM.SINGLE_LINE) });
         releyendo = false;
@@ -224,8 +238,13 @@
       return pedir({ tipo: 'ocr', paginas: leidas, pistas: pistas || {} }, CONFIG.tiempoLectura);
     })();
     const limite = new Promise((resolve, reject) => { reloj = setTimeout(() => reject(error('El reconocimiento de texto tardó demasiado', 'ocr-tiempo')), o.tiempo); });
+    const cancelada = new Promise((resolve, reject) => {
+      const abortar = () => reject(error('Lectura cancelada', 'cancelada'));
+      if (senal && senal.aborted) abortar();
+      else if (senal) senal.addEventListener('abort', abortar, { once: true });
+    });
     try {
-      return await Promise.race([trabajo, limite]);
+      return await Promise.race([trabajo, limite, cancelada]);
     } catch (e) {
       throw e && typeof e.code === 'string' ? e : error(`No se pudo leer la planilla escaneada: ${(e && e.message) || e}`, 'ocr');
     } finally {
@@ -235,10 +254,10 @@
       trabajo.then(cerrar, cerrar);   // lo que termine de crearse después del límite de tiempo también se cierra
     }
   };
-  // Una planilla escaneada a la vez: cada OCR ocupa bastante memoria.
-  const leerConOcr = (archivo, pistas, alAvanzar) => {
+  // Una planilla escaneada a la vez: cada OCR ocupa bastante memoria. La que se cancela mientras espera no corre.
+  const leerConOcr = (archivo, pistas, alAvanzar, senal) => {
     const avisar = (x) => { try { if (alAvanzar) alAvanzar(x); } catch (e) { /* la interfaz no tumba la lectura */ } };
-    const tarea = colaOcr.then(() => ocr(archivo, pistas, avisar));
+    const tarea = colaOcr.then(() => (senal && senal.aborted ? Promise.reject(error('Lectura cancelada', 'cancelada')) : ocr(archivo, pistas, avisar, senal)));
     colaOcr = tarea.catch(() => {});
     return tarea;
   };
@@ -257,16 +276,17 @@
     return cargando;
   };
   // pistas: { ibc, anio, mes } de la fila de la app (ayudan a escoger y a comparar). alAvanzar (opcional) recibe
-  // { fase: 'ocr-carga' | 'ocr' | 'ocr-analisis', pagina, paginas, progreso } si la planilla va por OCR.
+  // { fase: 'ocr-carga' | 'ocr' | 'ocr-analisis', pagina, paginas, progreso } si la planilla va por OCR, y
+  // senal (opcional, un AbortSignal) cancela el OCR: leer() rechaza con el código 'cancelada'.
   // Devuelve el resultado de py/leer_planilla.py: { ok, numeroPlanilla, fechaPago, salud, pension, arl, ...,
   // avisos, ocr } o { ok: false, error }.
-  const leer = async (archivo, pistas, alAvanzar) => {
+  const leer = async (archivo, pistas, alAvanzar, senal) => {
     await precargar();
     const datos = await archivo.arrayBuffer();
     const r = await pedir({ tipo: 'leer', datos, pistas: pistas || {} }, CONFIG.tiempoLectura, [datos]);
     // Sin texto (escaneada) o con una capa de texto que no sirve sobre una imagen: se lee con OCR.
     const escaneada = r && !r.ok && (r.error === 'sin-texto' || (r.error === 'sin-datos' && r.escaneada));
-    return escaneada && CONFIG.ocr ? leerConOcr(archivo, pistas, alAvanzar) : r;
+    return escaneada && CONFIG.ocr ? leerConOcr(archivo, pistas, alAvanzar, senal) : r;
   };
   const estado = () => (cargado ? 'listo' : cargando ? 'cargando' : 'sin-cargar');
 
