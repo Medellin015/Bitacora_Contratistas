@@ -91,8 +91,10 @@ un archivo. En la app se sigue viendo el nombre original.
 ### Crear el flujo con Copilot
 
 Copilot de Power Automate entiende mejor el inglés y no arma bien las
-expresiones largas. Úsalo para el esqueleto y luego pega los valores de la
-sección siguiente.
+expresiones largas. Úsalo para el esqueleto y luego pega los valores de
+«Valores de cada paso». Si en cambio usas un asistente que maneja el navegador
+(una extensión de IA), dale el prompt de «Crear el flujo con un asistente del
+navegador»: trae también todos los valores.
 
 En [make.powerautomate.com](https://make.powerautomate.com) → **Crear con
 Copilot**, pega:
@@ -132,6 +134,90 @@ Si Copilot no está disponible, crea el flujo en blanco («Flujo de nube
 instantáneo» → disparador «Cuando se recibe una solicitud HTTP») y agrega las
 mismas acciones a mano, con los mismos nombres.
 
+### Crear el flujo con un asistente del navegador
+
+Este prompt trae, además de los nombres y el orden, el contenido de cada acción.
+Cambia solo `RUTA_RAIZ` por la ruta de tu carpeta (o deja que el asistente te la
+pregunte). Las expresiones son las mismas de «Valores de cada paso».
+
+```text
+Construye en este navegador, en make.powerautomate.com, el flujo de nube «subirArchivo» de la app Bitácora Contratistas. La app le manda cada archivo adjunto en un POST y el flujo lo guarda en mi OneDrive y responde con el enlace. Hazlo a mano (no uses Copilot) y usa la cuenta con la que ya estoy conectado: es la dueña de la carpeta de OneDrive.
+
+DATO QUE DEBES PEDIRME ANTES DE EMPEZAR (si no lo cambié aquí)
+RUTA_RAIZ = /RUTA/DE/TU/CARPETA
+Es la ruta de la carpeta raíz en mi OneDrive tal como se ve arriba al abrirla, empezando por «/», sin «Mis archivos» ni «Documentos» y sin barra al final (por ejemplo /Bitácora/Soportes). Un vínculo para compartir (https://…) NO sirve.
+
+REGLAS PARA TODO EL FLUJO
+1. Usa los nombres de acción EXACTOS de abajo (mayúsculas y guiones bajos incluidos): las expresiones los usan. Para renombrar, haz clic en el título de la acción en su panel. Renombra cada acción ANTES de pegar expresiones que la mencionen.
+2. Lo marcado EXPRESIÓN se pega con el editor de expresiones: clic en el campo, botón fx (o escribe «/» y elige «Insertar expresión»), pega el texto tal cual y pulsa «Agregar». En el campo debe quedar una ficha de color; si queda texto suelto, bórralo y repite.
+3. Lo marcado TEXTO se escribe directo, sin fx.
+4. Si la interfaz está en inglés: Redactar = Compose; Inicializar variable = Initialize variable; Establecer variable = Set variable; Ámbito = Scope; Filtrar matriz = Filter array; Respuesta = Response; Crear archivo = Create file; Crear vínculo de recurso compartido = Create share link; Configuración = Settings; Ejecutar después de = Run after; Directiva de reintentos = Retry policy; Ninguno = None.
+5. Si te pide una licencia Premium, si una acción no existe o si algo no coincide con estas instrucciones, detente y avísame en vez de improvisar.
+
+PASO 1. Crear el flujo
+- Crear > Flujo de nube instantáneo > nombre «subirArchivo» > desencadenador «Cuando se recibe una solicitud HTTP» (When an HTTP request is received).
+- En el desencadenador: Quién puede desencadenar el flujo = Cualquiera (Anyone). Método = POST. Esquema JSON del cuerpo de la solicitud: vacío.
+
+PASO 2. Dos variables, debajo del desencadenador y fuera de todo ámbito
+2.1 «Inicializar variable», acción llamada Inicializar_codigo: Nombre = TEXTO codigo · Tipo = Entero (Integer) · Valor = TEXTO 500
+2.2 «Inicializar variable», acción llamada Inicializar_cuerpo: Nombre = TEXTO cuerpo · Tipo = Objeto (Object) · Valor = EXPRESIÓN:
+  json('{"ok": false, "mensaje": "No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador."}')
+
+PASO 3. Ámbito llamado Intentar, debajo de las variables, con estas 10 acciones ADENTRO y en este orden
+3.1 Redactar, llamada Entrada · Entradas = EXPRESIÓN:
+  removeProperty(json(triggerBody()), 'base64')
+3.2 HTTP (la acción integrada «HTTP»; NO «Enviar una solicitud HTTP a SharePoint» ni «HTTP con Microsoft Entra ID»), llamada Leer_documento · Método = GET · Autenticación = ninguna · URI = EXPRESIÓN:
+  concat('https://firestore.googleapis.com/v1/projects/bitacora-contratistas/databases/(default)/documents/', if(equals(outputs('Entrada')?['origen'], 'envio'), 'envios', 'borradores'), '/', uriComponent(outputs('Entrada')?['docId']), '?mask.fieldPaths=contratoId&mask.fieldPaths=formularioId&mask.fieldPaths=periodo')
+  Encabezados: clave = TEXTO Authorization · valor = EXPRESIÓN:
+  concat('Bearer ', outputs('Entrada')?['idToken'])
+3.3 HTTP, llamada Leer_contrato · Método = GET · Autenticación = ninguna · el mismo encabezado Authorization con la misma expresión · URI = EXPRESIÓN:
+  concat('https://firestore.googleapis.com/v1/projects/bitacora-contratistas/databases/(default)/documents/contratos/', uriComponent(body('Leer_documento')?['fields']?['contratoId']?['stringValue']), '?mask.fieldPaths=info.contratista.nombreCompleto')
+3.4 Redactar, llamada Contratista · Entradas = EXPRESIÓN:
+  trim(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(coalesce(body('Leer_contrato')?['fields']?['info']?['mapValue']?['fields']?['contratista']?['mapValue']?['fields']?['nombreCompleto']?['stringValue'], ''), '.', ''), '/', '-'), decodeUriComponent('%5C'), '-'), ':', '-'), '*', '-'), '?', '-'), decodeUriComponent('%22'), '-'), '<', '-'), '>', '-'), '|', '-'), '#', '-'), '%', '-'), '~', '-'))
+3.5 Redactar, llamada Subcarpeta · Entradas = EXPRESIÓN:
+  concat(body('Leer_documento')?['fields']?['contratoId']?['stringValue'], if(empty(outputs('Contratista')), '', concat(' - ', outputs('Contratista'))), '/', body('Leer_documento')?['fields']?['periodo']?['stringValue'])
+3.6 Redactar, llamada NombreArchivo · Entradas = EXPRESIÓN:
+  concat(body('Leer_documento')?['fields']?['formularioId']?['stringValue'], '_', outputs('Entrada')?['preguntaId'], '_', convertFromUtc(utcNow(), 'SA Pacific Standard Time', 'yyyyMMdd-HHmmssfff'), '_', replace(replace(outputs('Entrada')?['nombre'], '#', '-'), '%', '-'))
+3.7 OneDrive para la Empresa > «Crear archivo», llamada Crear_archivo:
+  - Ruta de acceso de carpeta = EXPRESIÓN (cambia /RUTA/DE/TU/CARPETA por RUTA_RAIZ y conserva la barra final, justo antes de la comilla):
+  concat('/RUTA/DE/TU/CARPETA/', outputs('Subcarpeta'))
+  - Nombre de archivo = EXPRESIÓN:
+  outputs('NombreArchivo')
+  - Contenido del archivo = EXPRESIÓN:
+  base64ToBinary(json(triggerBody())?['base64'])
+  Al guardar, el diseñador muestra este último campo sin base64ToBinary. Es normal: NO lo edites.
+3.8 OneDrive para la Empresa > «Crear vínculo de recurso compartido», llamada Crear_vinculo: Archivo = EXPRESIÓN body('Crear_archivo')?['Id'] · Tipo de vínculo = Ver (View) · Ámbito de vínculo = Organización (Organization).
+3.9 Establecer variable, llamada Exito_codigo: Nombre = codigo · Valor = TEXTO 200
+3.10 Establecer variable, llamada Exito_cuerpo: Nombre = cuerpo · Valor = EXPRESIÓN:
+  addProperty(addProperty(addProperty(json('{"ok": true}'), 'url', body('Crear_vinculo')?['WebUrl']), 'id', body('Crear_archivo')?['Id']), 'nombre', body('Crear_archivo')?['Name'])
+
+PASO 4. Ámbito llamado Capturar, debajo de Intentar y FUERA de él
+- Configuración > Ejecutar después de: en Intentar marca «Error» (has failed) y «Ha agotado el tiempo de espera» (has timed out); al final desmarca «Correcto» (is successful).
+- Adentro, en este orden:
+4.1 Filtrar matriz, llamada Filtrar_fallo · Desde = EXPRESIÓN result('Intentar') · Condición: en «modo avanzado» escribe @equals(item()?['status'], 'Failed') (en modo básico: izquierda EXPRESIÓN item()?['status'], operador «es igual a», derecha TEXTO Failed).
+4.2 Establecer variable, llamada Error_codigo: Nombre = codigo · Valor = EXPRESIÓN:
+  if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 403, 500)
+4.3 Establecer variable, llamada Error_cuerpo: Nombre = cuerpo · Valor = EXPRESIÓN:
+  addProperty(json('{"ok": false}'), 'mensaje', if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 'No se pudo verificar tu sesión o tu permiso sobre este formulario. Recarga la página e inténtalo de nuevo.', 'No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador.'))
+
+PASO 5. Acción «Respuesta» (Response), llamada Respuesta, debajo de Capturar y fuera de los ámbitos
+- Configuración > Ejecutar después de: en Capturar marca las cuatro casillas: Correcto, Ha agotado el tiempo de espera, Se ha omitido y Error.
+- Código de estado = EXPRESIÓN variables('codigo')
+- Encabezados: TEXTO Content-Type = TEXTO application/json · TEXTO Access-Control-Allow-Origin = TEXTO *
+- Cuerpo = EXPRESIÓN variables('cuerpo')
+- Respuesta asincrónica: desactivada.
+
+PASO 6. Sin reintentos
+En Leer_documento, Leer_contrato, Crear_archivo y Crear_vinculo: Configuración > Redes > Directiva de reintentos = Ninguno.
+
+PASO 7. Revisar, guardar y darme la URL
+- Deben quedar 18 acciones además del desencadenador: 2 de variables, Intentar con 10 adentro, Capturar con 3 adentro y Respuesta.
+- En «Vista de código» (Code view) de Crear_archivo, el contenido debe decir base64ToBinary(json(triggerBody())?['base64']) y la ruta debe terminar en /', outputs('Subcarpeta')).
+- Guarda. Si arriba aparecen «Guardar borrador» y «Publicar» en vez de «Guardar», pulsa «Publicar».
+- Abre el desencadenador y copia la «HTTP URL» (empieza por https:// y termina con sig=…). Muéstramela solo a mí, sin pegarla en ningún otro sitio.
+- No actives todavía «Entradas seguras» ni «Salidas seguras»: eso va después de que yo pruebe desde la app.
+```
+
 ### Valores de cada paso
 
 **Cómo pegar una expresión.** Todo valor con paréntesis (como
@@ -154,8 +240,13 @@ nombres de los encabezados (`Authorization`, `Content-Type`,
 **2. Variables** (fuera de los ámbitos)
 
 - `codigo` · Entero · `500`
-- `cuerpo` · Objeto ·
+- `cuerpo` · Objeto · escribe tal cual
   `{"ok": false, "mensaje": "No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador."}`
+  o pega con *fx* la misma expresión:
+  <!-- expr:cuerpo_inicial -->
+  ```
+  json('{"ok": false, "mensaje": "No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador."}')
+  ```
 
 **3. Ámbito «Intentar»**
 
@@ -251,25 +342,16 @@ archivo siga en la carpeta.
 
 `Exito_codigo` (Establecer variable): `codigo` = `200`.
 
-`Exito_cuerpo` (Establecer variable): en `cuerpo`, escribe
-`{"ok": true, "url": "", "id": "", "nombre": ""}`. Luego pon el cursor entre
-cada par de comillas vacías e inserta con *fx* esta expresión (sin `@{` ni
-`}`):
-
-- en `url`: `body('Crear_vinculo')?['WebUrl']`
-- en `id`: `body('Crear_archivo')?['Id']`
-- en `nombre`: `body('Crear_archivo')?['Name']`
-
-Al terminar, abre la pestaña «Vista de código» de la acción. Sale toda la
-acción en varias líneas; dentro de `"value"` deben verse estas cuatro (el
-diseñador agrega `@{` y `}` por su cuenta):
-
+`Exito_cuerpo` (Establecer variable): en `cuerpo`, pega con *fx* esta
+expresión, que arma `{"ok": true, "url", "id", "nombre"}` con el vínculo y el
+archivo:
+<!-- expr:Exito_cuerpo -->
 ```
-"ok": true,
-"url": "@{body('Crear_vinculo')?['WebUrl']}",
-"id": "@{body('Crear_archivo')?['Id']}",
-"nombre": "@{body('Crear_archivo')?['Name']}"
+addProperty(addProperty(addProperty(json('{"ok": true}'), 'url', body('Crear_vinculo')?['WebUrl']), 'id', body('Crear_archivo')?['Id']), 'nombre', body('Crear_archivo')?['Name'])
 ```
+En la pestaña «Vista de código» de la acción, `"value"` debe empezar por
+`@addProperty(`. Si ves el texto entre comillas sin la `@`, quedó como texto:
+bórralo y vuelve a pegarlo con *fx*.
 
 **4. Ámbito «Capturar»**
 
@@ -286,12 +368,12 @@ casilla marcada no se puede quitar; por eso va de último).
 if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 403, 500)
 ```
 
-`Error_cuerpo` (Establecer variable): en `cuerpo`, escribe
-`{"ok": false, "mensaje": ""}` y, entre las comillas vacías de `mensaje`,
-inserta con *fx* esta expresión:
-<!-- expr:mensaje_error -->
+`Error_cuerpo` (Establecer variable): en `cuerpo`, pega con *fx* esta
+expresión, que arma `{"ok": false, "mensaje"}` con el mensaje según la acción
+que falló:
+<!-- expr:Error_cuerpo -->
 ```
-if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 'No se pudo verificar tu sesión o tu permiso sobre este formulario. Recarga la página e inténtalo de nuevo.', 'No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador.')
+addProperty(json('{"ok": false}'), 'mensaje', if(contains(createArray('Leer_documento', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 'No se pudo verificar tu sesión o tu permiso sobre este formulario. Recarga la página e inténtalo de nuevo.', 'No se pudo guardar el archivo en OneDrive. Intenta de nuevo; si sigue, avisa al administrador.'))
 ```
 
 **5. Respuesta** (fuera de los ámbitos)
