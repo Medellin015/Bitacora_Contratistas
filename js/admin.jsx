@@ -536,6 +536,8 @@ const AvisosPlantillaBase = ({ className = 'mb-3' }) => {
   ));
 };
 const TIPOS_PREGUNTA = ['TEXTO', 'TEXTO_LARGO', 'NUMERO', 'MONEDA', 'PORCENTAJE', 'FECHA', 'SELECCION_UNICA', 'SELECCION_MULTIPLE', 'SI_NO', 'CALCULADA', 'COMPUESTA', 'ARCHIVO', 'URL', 'TELEFONO', 'CORREO', 'SEPARADOR'];
+// Datos que entrega el lector de planillas (py/leer_planilla.py) y que «llenar» puede llevar a una celda.
+const DATOS_PLANILLA = ['numeroPlanilla', 'fechaPago', 'salud', 'pension', 'arl', 'fsp', 'ccf', 'ibc', 'total', 'periodoPension', 'periodoSalud'];
 const validarEsquema = (f) => {
   const p = [];
   if (!f || typeof f !== 'object') return ['El JSON debe ser un objeto'];
@@ -582,6 +584,22 @@ const validarEsquema = (f) => {
       if (!fuente || (campo === undefined && compuestas[origen])) p.push(`${q.id}.${s.id}: precargarDe «${s.precargarDe}» debe ser una pregunta de primer nivel o compuesta.campo existente`);
       else if (ORIGEN_NO_SIMPLE.includes(fuente.tipo)) p.push(`${q.id}.${s.id}: precargarDe no puede tomar valores de una pregunta ${fuente.tipo}`);
       if (TIPOS_SIN_PRECARGA.includes(s.tipo)) p.push(`${q.id}.${s.id}: precargarDe no aplica a preguntas ${s.tipo}`);
+    });
+    // Lector de planillas: en un ARCHIVO, «llenar» va a celdas simples de la misma fila y «pistas» a preguntas existentes.
+    (q.subpreguntas || []).filter((s) => s.lector).forEach((s) => {
+      const ref = `${q.id}.${s.id}`;
+      if (s.lector !== 'planillaPILA') p.push(`${ref}: lector «${s.lector}» desconocido (solo planillaPILA)`);
+      if (s.tipo !== 'ARCHIVO') p.push(`${ref}: «lector» solo aplica a preguntas ARCHIVO`);
+      Object.entries(s.llenar || {}).forEach(([dato, destino]) => {
+        if (!DATOS_PLANILLA.includes(dato)) p.push(`${ref}: llenar «${dato}» no es un dato de la planilla (${DATOS_PLANILLA.join(', ')})`);
+        const sub = (q.subpreguntas || []).find((x) => x.id === destino);
+        if (!sub || ORIGEN_NO_SIMPLE.includes(sub.tipo) || sub.tipo === 'CALCULADA') p.push(`${ref}: llenar «${dato}» debe ir a una subpregunta simple de ${q.id} («${destino}» no lo es)`);
+      });
+      Object.entries(s.pistas || {}).forEach(([k, origenRef]) => {
+        const [origen, campo] = String(origenRef).split('.');
+        const fuente = campo === undefined ? primerNivel[origen] : compuestas[origen] && (compuestas[origen].subpreguntas || []).find((x) => x.id === campo);
+        if (!fuente) p.push(`${ref}: la pista «${k}» apunta a «${origenRef}», que no existe`);
+      });
     });
   });
   return p.concat(Formulas.validarFormulario(f));

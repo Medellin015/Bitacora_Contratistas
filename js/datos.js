@@ -618,8 +618,8 @@
         "id": "cuenta_cobro",
         "nombre": "Cuenta de cobro y pago de seguridad social",
         "tipo": "CUENTA_COBRO",
-        "version": 4,
-        "novedad": "Seguridad social en un solo paso: la base de cotización se precarga con el valor a cobrar y el pago con lo obligatorio de cada planilla (si cambias el valor a cobrar, todo se recalcula).",
+        "version": 5,
+        "novedad": "Al adjuntar la planilla de seguridad social en PDF, la app la lee (Python en el navegador) y llena el número, la fecha de pago y lo pagado en salud, pensión y ARL de esa fila; los valores se pueden corregir.",
         "activo": true,
         "plantillaDescarga": "cuenta_cobro_provisional",
         "config": {
@@ -911,7 +911,21 @@
                     "obligatoria": true,
                     "acepta": ".pdf",
                     "maxArchivos": 1,
-                    "maxMB": 10
+                    "maxMB": 10,
+                    "ayuda": "Al adjuntarla, la app lee el número, la fecha de pago y lo pagado en salud, pensión y ARL, y llena esta planilla. Revisa los valores.",
+                    "lector": "planillaPILA",
+                    "llenar": {
+                      "numeroPlanilla": "numeroPlanilla",
+                      "fechaPago": "fechaPago",
+                      "salud": "salud",
+                      "pension": "pension",
+                      "arl": "arl"
+                    },
+                    "pistas": {
+                      "ibc": "planillas.ibc",
+                      "anio": "planillas.anio",
+                      "mes": "planillas.mes"
+                    }
                   }
                 ]
               },

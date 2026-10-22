@@ -6,7 +6,8 @@
      1. Valores por defecto (tokens de porDefecto) y respuestas iniciales
      2. Validación por pregunta y por capítulo
      3. Controles por tipo (texto, número, moneda, porcentaje, fecha, selección,
-        sí/no, calculada, archivo, url/teléfono/correo)
+        sí/no, calculada, archivo —que lee la planilla PILA si la pregunta tiene
+        «lector»—, url/teléfono/correo)
      4. Compuesta (tabla en escritorio, tarjetas en móvil)
      5. Pregunta (envoltura con etiqueta, ayuda, error, «Traer del mes anterior»)
      6. Compuestas enlazadas (filasDe / precargarDe)
@@ -168,7 +169,20 @@ const validarValor = (q, v) => {
 // Estado vivo del motor para los controles: subidas en curso por celda (sobreviven a mover filas
 // o cambiar de capítulo) y las respuestas vigentes (para no avisar desde dentro de un setState).
 const EstadoMotor = createContext(null);
-const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubida }) => {
+// Mensajes del lector de planillas (js/lector-planilla.js → py/leer_planilla.py) según el error.
+const MENSAJES_LECTOR = {
+  clave: 'La planilla tiene contraseña de apertura y no se puede leer.',
+  'sin-texto': 'El PDF no tiene texto (parece una imagen escaneada).',
+  'no-pdf': 'El archivo no se pudo abrir como PDF.',
+  cifrado: 'La planilla está cifrada y no se pudo abrir.',
+  'sin-datos': 'No se reconoció una planilla de seguridad social en el PDF.',
+  carga: 'No se pudo cargar el lector de planillas (la red puede estar bloqueando cdn.jsdelivr.net o files.pythonhosted.org).',
+  tiempo: 'El lector de planillas tardó demasiado.',
+  navegador: 'Este navegador no puede leer la planilla.',
+};
+// lector (opcional, de la compuesta): { pistas: () => ({ ibc, anio, mes }), aplicar: (resultado) => resumen | '' | null }
+// ('' si no hubo nada que llenar; null si la fila ya no existe).
+const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubida, lector }) => {
   const app = useApp();
   const motor = useContext(EstadoMotor);
   const clave = claveSubida || idCampo;
@@ -178,6 +192,25 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
   const [arrastre, setArrastre] = useState(false);
   const lista = Array.isArray(valor) ? valor : [];
   const maxArchivos = q.maxArchivos || 1;
+  // Lectura de la planilla: corre a la par de la subida; si la persona elige otro archivo, la anterior se descarta.
+  const [lectura, setLectura] = useState(null);
+  const turnoLectura = useRef(0);
+  const leePlanillas = !!(lector && window.LectorPlanilla);
+  const leerPlanilla = async (archivo) => {
+    const turno = ++turnoLectura.current;
+    setLectura({ estado: 'leyendo', primera: LectorPlanilla.estado() !== 'listo' });
+    let r;
+    try { r = await LectorPlanilla.leer(archivo, lector.pistas()); } catch (e) {
+      if (turno === turnoLectura.current) setLectura({ estado: 'error', mensaje: MENSAJES_LECTOR[e.code] || e.message });
+      return;
+    }
+    if (turno !== turnoLectura.current) return;
+    if (!r || !r.ok) { setLectura({ estado: 'error', mensaje: MENSAJES_LECTOR[r && r.error] || (r && r.mensaje) || 'No se pudo leer la planilla.' }); return; }
+    const resumen = lector.aplicar(r);
+    if (resumen === null) { setLectura(null); return; }   // la fila se quitó mientras se leía
+    setLectura(resumen ? { estado: 'listo', resumen, avisos: r.avisos || [] } : { estado: 'error', mensaje: MENSAJES_LECTOR['sin-datos'] });
+  };
+  const precargarLector = () => { if (leePlanillas) LectorPlanilla.precargar().catch(() => {}); };
   const acepta = String(q.acepta || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
   const procesar = async (archivos) => {
     const nuevos = Array.from(archivos || []);
@@ -191,6 +224,7 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
       const ext = U.extension(a.name);
       if (acepta.length && !acepta.includes(ext)) { app.avisar('alerta', `«${a.name}»: extensión no permitida (${acepta.join(', ')})`); continue; }
       if (q.maxMB && a.size > q.maxMB * 1048576) { app.avisar('alerta', `«${a.name}» supera ${q.maxMB} MB`); continue; }
+      if (leePlanillas && /^\.?pdf$/.test(ext)) leerPlanilla(a);
       marcarSubida(1);
       try {
         const r = await subir(a, q);
@@ -211,19 +245,29 @@ const CampoArchivo = ({ q, valor, onCambio, editable, subir, idCampo, claveSubid
               <Icono nombre="archivo" className="texto-3" />
               <span className="flex-1 min-w-0 truncate">{a.url ? <a href={a.url} target="_blank" rel="noopener noreferrer">{a.nombre}</a> : a.nombre}</span>
               <span className="mono text-xs texto-3">{U.tamanoLegible(a.tamano)}</span>
-              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => onCambio((vigente) => { const l = Array.isArray(vigente) ? vigente : []; const k = l.indexOf(a); return l.filter((_, j) => j !== (k >= 0 ? k : i)); })}><Icono nombre="x" tam={14} /></button> : null}
+              {editable ? <button type="button" className="btn btn-fantasma btn-xs btn-icono" aria-label={`Quitar ${a.nombre}`} onClick={() => { turnoLectura.current++; setLectura(null); onCambio((vigente) => { const l = Array.isArray(vigente) ? vigente : []; const k = l.indexOf(a); return l.filter((_, j) => j !== (k >= 0 ? k : i)); }); }}><Icono nombre="x" tam={14} /></button> : null}
             </li>
           ))}
         </ul>
       ) : null}
       {editable && lista.length < maxArchivos ? (
-        <label className={`zona-soltar block cursor-pointer ${arrastre ? 'activa' : ''}`} onDragOver={(e) => { e.preventDefault(); setArrastre(true); }} onDragLeave={() => setArrastre(false)} onDrop={(e) => { e.preventDefault(); setArrastre(false); procesar(e.dataTransfer.files); }}>
+        <label className={`zona-soltar block cursor-pointer ${arrastre ? 'activa' : ''}`} onClick={precargarLector} onDragEnter={precargarLector} onDragOver={(e) => { e.preventDefault(); setArrastre(true); }} onDragLeave={() => setArrastre(false)} onDrop={(e) => { e.preventDefault(); setArrastre(false); procesar(e.dataTransfer.files); }}>
           <input id={idCampo} type="file" className="sr-solo" accept={q.acepta || undefined} multiple={maxArchivos > 1} disabled={subiendo} onChange={(e) => { procesar(e.target.files); e.target.value = ''; }} />
           <div className="flex items-center justify-center gap-2 text-sm">{subiendo ? <><Icono nombre="cargando" className="girando" /> Subiendo…</> : <><Icono nombre="subir" /> Elegir archivo{maxArchivos > 1 ? 's' : ''}</>}</div>
           <div className="text-xs texto-3 mt-1">{acepta.length ? acepta.join(', ') : 'Cualquier tipo'}{q.maxMB ? ` · máx. ${q.maxMB} MB` : ''}{maxArchivos > 1 ? ` · hasta ${maxArchivos}` : ''}</div>
         </label>
       ) : null}
       {!editable && !lista.length ? <span className="texto-3 text-sm">Sin archivos</span> : null}
+      {lectura ? (
+        <div className={`alerta-caja mt-2 ${lectura.estado === 'error' || (lectura.avisos && lectura.avisos.length) ? 'alerta-alerta' : 'alerta-info'}`} role="status" aria-live="polite">
+          <Icono nombre={lectura.estado === 'leyendo' ? 'cargando' : lectura.estado === 'error' ? 'alerta' : 'check'} className={lectura.estado === 'leyendo' ? 'girando' : ''} />
+          <div className="min-w-0">
+            {lectura.estado === 'leyendo' ? <span>Leyendo la planilla…{lectura.primera ? ' La primera vez se descarga el lector (Python) y tarda unos segundos.' : ''}</span> : null}
+            {lectura.estado === 'listo' ? <><span><strong>Datos tomados de la planilla:</strong> {lectura.resumen}. Revísalos antes de enviar.</span>{lectura.avisos.length ? <ul className="mt-1 pl-4 list-disc">{lectura.avisos.map((t) => <li key={t}>{t}</li>)}</ul> : null}</> : null}
+            {lectura.estado === 'error' ? <span>{lectura.mensaje} Escribe los valores a mano.</span> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -248,7 +292,7 @@ const SeleccionMultiple = ({ q, valor, onCambio, editable, invalido, catalogos }
     </div>
   );
 };
-const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, valorCalculado, alerta, catalogos, subir, claveSubida }) => {
+const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, valorCalculado, alerta, catalogos, subir, claveSubida, lector }) => {
   const comun = { id: idCampo, invalido, disabled: !editable, 'aria-invalid': invalido || undefined };
   switch (q.tipo) {
     case 'TEXTO': return <Entrada {...comun} type="text" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} maxLength={q.max || undefined} onChange={(e) => onCambio(e.target.value)} />;
@@ -289,7 +333,7 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
         {alerta && q.mensajeAlerta ? <div className="error-campo"><Icono nombre="alerta" tam={14} />{q.mensajeAlerta}</div> : null}
       </div>
     );
-    case 'ARCHIVO': return <CampoArchivo q={q} valor={valor} onCambio={onCambio} editable={editable} subir={subir} idCampo={idCampo} claveSubida={claveSubida} />;
+    case 'ARCHIVO': return <CampoArchivo q={q} valor={valor} onCambio={onCambio} editable={editable} subir={subir} idCampo={idCampo} claveSubida={claveSubida} lector={lector} />;
     case 'URL': return <Entrada {...comun} type="url" inputMode="url" className="mono" value={valor == null ? '' : valor} placeholder={q.placeholder || 'https://'} onChange={(e) => onCambio(e.target.value.trim())} />;
     case 'TELEFONO': return <Entrada {...comun} type="tel" inputMode="tel" className="mono" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} onChange={(e) => onCambio(e.target.value)} />;
     case 'CORREO': return <Entrada {...comun} type="email" inputMode="email" value={valor == null ? '' : valor} placeholder={q.placeholder || ''} onChange={(e) => onCambio(e.target.value.trim())} />;
@@ -298,6 +342,8 @@ const ControlPregunta = ({ q, valor, onCambio, editable, idCampo, invalido, ev, 
 };
 
 /* ===== 4. Compuesta ===== */
+// Nombre corto de cada dato leído de la planilla, para el resumen («planilla No. … · pagada el … · salud $ …»).
+const ETIQUETAS_LECTURA = { numeroPlanilla: 'planilla No.', fechaPago: 'pagada el', salud: 'salud', pension: 'pensión', arl: 'ARL' };
 // Activado con el dedo: no se mueve el foco a un campo (en el teléfono abriría el teclado).
 const porToque = (e) => !!(e && e.nativeEvent && e.nativeEvent.pointerType === 'touch');
 const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogos, subir, ctx, traer }) => {
@@ -369,6 +415,39 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
     // En el borde el botón pulsado se desactiva y el foco se perdería: pasa al botón contrario.
     requestAnimationFrame(() => { if (document.activeElement && document.activeElement !== document.body) return; const el = document.getElementById(`${idFila(fila, i)}-${d < 0 ? 'bajar' : 'subir'}`); if (el) el.focus(); });
   };
+  // Lectura de la planilla (subpregunta ARCHIVO con «lector»): lo leído del PDF va a las celdas de «llenar»
+  // como si lo escribiera la persona; por eso queda «a mano» si difiere de lo obligatorio. «pistas» manda al
+  // lector valores de la fila (IBC, mes y año de la planilla) para escoger entre candidatos y avisar diferencias.
+  const lectorDe = (s, i) => {
+    if (!s.lector || !celdaEditable(s)) return null;
+    const fila = filas[i];
+    return {
+      pistas: () => {
+        const p = {};
+        Object.entries(s.pistas || {}).forEach(([k, ref]) => { const v = origenEnlace(ev, ref, i); if (v !== '' && v !== null && v !== undefined && !(typeof v === 'number' && !Number.isFinite(v))) p[k] = v; });
+        return p;
+      },
+      aplicar: (r) => {
+        if (!vigentes(motor ? motor.leer(q.id) : filas).some(esLaFila(fila))) return null;
+        const cambios = {};
+        const partes = [];
+        Object.entries(s.llenar || {}).forEach(([campo, destino]) => {
+          const sub = subs.find((x) => x.id === destino);
+          const v = r[campo];
+          if (!sub || !celdaEditable(sub) || v === null || v === undefined || v === '') return;
+          const numerico = sub.tipo === 'MONEDA' || sub.tipo === 'NUMERO';
+          const valor = numerico ? Number(v) : String(v);
+          if (numerico && !Number.isFinite(valor)) return;
+          cambios[destino] = valor;
+          const texto = sub.tipo === 'MONEDA' ? U.formatoCOP(valor) : sub.tipo === 'FECHA' ? U.fechaCorta(valor) : valor;
+          partes.push(`${ETIQUETAS_LECTURA[campo] || sub.etiqueta} ${texto}`);
+        });
+        if (!partes.length) return '';
+        cambiarFila(i, (f) => ({ ...f, ...cambios }));
+        return partes.join(' · ');
+      },
+    };
+  };
   // «Usar …» solo tiene sentido si la fila tiene equivalente en su origen.
   const tieneOrigen = (s, i) => { const [comp, campo] = String(s.precargarDe).split('.'); return campo === undefined || i < ev.lista(comp, campo).length; };
   const celdaEditable = (s) => editable && !s.soloLectura && s.tipo !== 'CALCULADA';
@@ -379,7 +458,7 @@ const Compuesta = ({ q, filas, onCambio, editable, ev, errores, idBase, catalogo
     return (
       <Campo key={s.id} etiqueta={compacto ? null : s.etiqueta} obligatoria={!compacto && s.obligatoria} id={idCampo} error={err} ayuda={compacto ? null : s.ayuda}>
         <ControlPregunta q={s} valor={filas[i][s.id]} onCambio={(v, info) => cambiarCelda(i, s.id, v, info)} editable={celdaEditable(s)} idCampo={idCampo} invalido={!!err}
-          ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} claveSubida={`${q.id}.${filas[i][ID_FILA] || i}.${s.id}`} />
+          ev={ev} valorCalculado={s.tipo === 'CALCULADA' ? ev.valorFila(q.id, i, s.id) : undefined} alerta={s.alertaSi ? ev.alertaFila(q.id, i, s.id) : false} catalogos={catalogos} subir={subir} claveSubida={`${q.id}.${filas[i][ID_FILA] || i}.${s.id}`} lector={lectorDe(s, i)} />
         {traer && s.precargar === 'ultimoEnvio' && celdaEditable(s) ? <button type="button" className="text-xs underline texto-2 mt-1" onClick={() => traer(q.id, i, s.id)}>Traer del mes anterior</button> : null}
         {esEnlazada(s) && celdaEditable(s) && manualesDe(filas[i]).includes(s.id) && tieneOrigen(s, i) ? <button type="button" className="text-xs underline texto-2 mt-1" title="Este valor se escribió a mano" onClick={(e) => { cambiarFila(i, (f) => conManuales(f, manualesDe(f).filter((x) => x !== s.id))); if (!porToque(e)) enfocar(idCampo); }}>{s.textoPrecarga || 'Volver al valor precargado'}</button> : null}
       </Campo>

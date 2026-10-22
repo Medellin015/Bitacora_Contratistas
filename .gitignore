@@ -1,0 +1,3 @@
+# Caché de Python (las pruebas de py/ la crean al correr)
+__pycache__/
+*.pyc
