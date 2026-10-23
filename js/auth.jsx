@@ -28,7 +28,7 @@ const MarcoAcceso = ({ children, titulo, subtitulo }) => {
           <div className="max-w-md">
             <p className="acceso-dependencia text-xs uppercase tracking-[0.2em] mb-3">{app.parametros.nombreDependencia}</p>
             <h1 className="text-3xl font-semibold leading-tight mb-4">Informes de ejecución y cuentas de cobro, en un solo lugar.</h1>
-            <p className="acceso-lema text-sm leading-relaxed">Diligencia el informe mensual y la cuenta de cobro dentro de la ventana del período, descarga el Word en el formato institucional y sigue las correcciones desde Solicitudes.</p>
+            <p className="acceso-lema text-sm leading-relaxed">Diligencia el informe de gestión dentro de la ventana del período, descarga el Word en el formato institucional y atiende las correcciones del revisor.</p>
           </div>
           <p className="acceso-version text-xs">v{VERSION_APP} · {app.parametros.nombreEntidad}</p>
         </aside>

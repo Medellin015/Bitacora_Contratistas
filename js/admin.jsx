@@ -451,8 +451,9 @@ const ModalVentana = ({ ventana, onCerrar, onGuardado }) => {
   const desde = U.dateDeLocal(f.desde), hasta = U.dateDeLocal(f.hasta);
   const generarAviso = () => {
     if (!desde || !hasta) return;
-    const nombres = f.formularios.map((id) => nombreFormulario(app, id)).join(' e ');
-    setF({ ...f, aviso: `Para el mes de <b>${U.nombrePeriodo(f.periodo).toUpperCase()}</b> la plataforma quedará habilitada para diligenciar ${nombres} ${U.textoVentana({ desde, hasta })}. Cualquier corrección, desde <b>Solicitudes</b>.` });
+    // Lo que el contratista puede diligenciar: sin la cuenta de cobro mientras esté deshabilitada.
+    const nombres = f.formularios.filter((id) => { const fm = app.formularios.find((x) => x.id === id); return !fm || procesoHabilitado(app, fm.tipo); }).map((id) => nombreFormulario(app, id)).join(' e ');
+    setF({ ...f, aviso: `Para el mes de <b>${U.nombrePeriodo(f.periodo).toUpperCase()}</b> la plataforma quedará habilitada para diligenciar ${nombres} ${U.textoVentana({ desde, hasta })}. Para corregir algo ya enviado, usa <b>Solicitar corrección</b> en el envío.` });
   };
   const guardar = async () => {
     if (!/^\d{4}-\d{2}$/.test(f.periodo)) { app.avisar('alerta', 'Período inválido (AAAA-MM)'); return; }
@@ -750,6 +751,9 @@ const PaginaAdminParametros = () => {
           <Campo etiqueta="Sigla del archivo Word" ayuda="INFORME DE GESTION {sigla} - …"><Entrada className="mono" value={p.siglaArchivo || ''} onChange={txt('siglaArchivo')} /></Campo>
           <Campo etiqueta="Plantilla de ruta NAS" ayuda="<CEDULA> se reemplaza por la cédula."><Entrada className="mono" value={p.rutaNasPlantilla || ''} onChange={txt('rutaNasPlantilla')} /></Campo>
           <Campo etiqueta="Vo.Bo. digital en el Word" ayuda="Si está activo, al aprobar se escribe «Aprobado en la plataforma por … el …» en la celda Vo.Bo."><Conmutador activo={!!p.voBoDigitalEnWord} onCambio={(v) => poner('voBoDigitalEnWord', v)} etiqueta={p.voBoDigitalEnWord ? 'Activo' : 'Inactivo'} id="vobo" /></Campo>
+        </SeccionParametros>
+        <SeccionParametros titulo="Procesos del contratista" ayuda="Lo que el contratista ve en su menú: Inicio, Cuenta de cobro, Generación de informe de gestión y Contrato.">
+          <Campo etiqueta="Cuenta de cobro" ayuda="Apagada, se ve en gris en el menú y no se pueden diligenciar cuentas de cobro nuevas; las ya enviadas se siguen viendo, descargando y corrigiendo."><Conmutador activo={!!p.cuentaCobroHabilitada} onCambio={(v) => poner('cuentaCobroHabilitada', v)} etiqueta={p.cuentaCobroHabilitada ? 'Habilitada' : 'Deshabilitada'} id="cuenta-cobro" /></Campo>
         </SeccionParametros>
         <SeccionParametros titulo="Seguridad social" ayuda="Confirmar cada año con la entidad: SMMLV, porcentajes y tope.">
           <div className="md:col-span-2">

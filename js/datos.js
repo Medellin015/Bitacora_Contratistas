@@ -1027,6 +1027,9 @@
     ...KIT.parametrosDefault,
     textoDeclaracion: 'Declaro bajo la gravedad de juramento que <PENDIENTE: texto de la declaración sobre costos y deducciones asociados a las rentas de trabajo>.',
     voBoDigitalEnWord: false,
+    // La cuenta de cobro del contratista está deshabilitada por ahora: se ve en el menú, en gris, y se
+    // enciende en Parámetros → Procesos del contratista.
+    cuentaCobroHabilitada: false,
     flujos: { subirArchivo: '', notificar: '', docxAPdf: '' },
     correo: {
       remitente: '',
@@ -1533,7 +1536,7 @@
     await DB.guardarPreRegistro('1000000005', { correo: 'nuevo@demo.local', nombreCompleto: 'Persona Nueva Demo', contratos: ['P-00001-DE-2026'], revisores: ['demo-revisor'], coordinadores: ['demo-coordinador'], activado: false, uid: null });
     // Ventanas: la del período actual abierta todo el mes; la anterior cerrada.
     await DB.guardarVentana(pActual, { periodo: pActual, desde: U.inicioDeDiaBogota(rAct.desde), hasta: U.finDeDiaBogota(rAct.hasta), formularios: ['informe_mensual', 'cuenta_cobro'],
-      aviso: `Para el mes de <b>${U.nombrePeriodo(pActual).toUpperCase()}</b> la plataforma está habilitada para diligenciar la Cuenta de cobro y el Informe mensual durante todo el mes (demostración). Cualquier corrección, desde <b>Solicitudes</b>.` });
+      aviso: `Para el mes de <b>${U.nombrePeriodo(pActual).toUpperCase()}</b> la plataforma está habilitada para diligenciar el informe de gestión durante todo el mes (demostración). Para corregir algo ya enviado, usa <b>Solicitar corrección</b> en el envío.` });
     await DB.guardarVentana(pAnterior, { periodo: pAnterior, desde: U.inicioDeDiaBogota(rAnt.desde), hasta: U.finDeDiaBogota(rAnt.hasta), formularios: ['informe_mensual', 'cuenta_cobro'], aviso: '' });
     // Un informe aprobado del período anterior (sirve para «Traer del mes anterior» y el historial).
     const respuestasInforme = {
