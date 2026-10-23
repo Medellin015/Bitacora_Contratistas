@@ -80,6 +80,22 @@ del administrador y **Formularios** muestran «Hay una versión nueva…» con e
 botón **Actualizar**, que la publica como versión nueva. Las respuestas se
 guardan por id de pregunta, así que envíos y borradores siguen sirviendo.
 
+### Menú del contratista
+
+El contratista ve cuatro apartados: **Inicio** (el tablero del período),
+**Cuenta de cobro**, **Generación de informe de gestión** y **Contrato**.
+
+- **Generación de informe de gestión** muestra el informe del período elegido
+  arriba (diligenciar, continuar el borrador o corregir) con su Word y vista
+  previa, y los informes anteriores del contrato, donde también se pide una
+  corrección. La **Cuenta de cobro** funciona igual cuando está habilitada.
+- **Cuenta de cobro: deshabilitada por ahora.** Se ve en el menú, en gris, y no
+  se pueden diligenciar cuentas de cobro nuevas (las ya enviadas se siguen
+  viendo, descargando y corrigiendo). Se habilita en **Parámetros → Procesos del
+  contratista**.
+- **Mis envíos** y **Solicitudes** ya no van en el menú; se llega a ellas desde
+  Inicio («Últimos envíos → Ver todos» e «Ir a solicitudes»).
+
 ### Lector de planillas de seguridad social
 
 En la cuenta de cobro, al adjuntar el PDF de la planilla en **Planillas

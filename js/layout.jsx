@@ -11,11 +11,15 @@
    ============================================================================ */
 
 /* ===== 1. Menús por rol ===== */
+// Un proceso del contratista que el administrador enciende en Parámetros: mientras tanto se ve en el
+// menú, en gris, y no se pueden diligenciar formularios nuevos (lo ya enviado se sigue viendo y corrigiendo).
+const procesoHabilitado = (app, tipo) => tipo !== 'CUENTA_COBRO' || !!(app.parametros && app.parametros.cuentaCobroHabilitada);
+// Mis envíos y Solicitudes no van en el menú del contratista: se llega a ellas desde Inicio.
 const NAV_POR_ROL = {
   contratista: [
-    { id: 'inicio', etiqueta: 'Inicio', icono: 'inicio', ruta: '#/inicio' },
-    { id: 'envios', etiqueta: 'Mis envíos', icono: 'envios', ruta: '#/envios' },
-    { id: 'solicitudes', etiqueta: 'Solicitudes', icono: 'solicitudes', ruta: '#/solicitudes', contador: 'solicitudes' },
+    { id: 'inicio', etiqueta: 'Inicio', icono: 'inicio', ruta: '#/inicio', contador: 'inicio' },
+    { id: 'cuenta', etiqueta: 'Cuenta de cobro', icono: 'envios', ruta: '#/cuenta-cobro', proceso: 'CUENTA_COBRO', contador: 'cuenta' },
+    { id: 'informe', etiqueta: 'Generación de informe de gestión', corta: 'Informe', icono: 'formulario', ruta: '#/informe', proceso: 'INFORME_MENSUAL', contador: 'informe' },
     { id: 'contrato', etiqueta: 'Contrato', icono: 'contrato', ruta: '#/contrato' },
   ],
   revisor: [
@@ -40,8 +44,15 @@ const NAV_POR_ROL = {
 };
 NAV_POR_ROL.coordinador = NAV_POR_ROL.revisor;
 const navDe = (rol) => NAV_POR_ROL[rol] || NAV_POR_ROL.contratista;
-const idActivo = (ruta) => {
+const navApagado = (n, app) => !!n.proceso && !procesoHabilitado(app, n.proceso);
+const idActivo = (ruta, app) => {
   const r = ruta.hash || '';
+  // Un formulario del contratista ilumina su proceso (el informe o la cuenta de cobro).
+  if (r.startsWith('#/formulario') && app && app.rol === 'contratista') {
+    const f = app.formularios.find((x) => x.id === ruta.params[0]);
+    const n = f && navDe(app.rol).find((x) => x.proceso === f.tipo);
+    return n ? n.id : 'inicio';
+  }
   if (r.startsWith('#/admin/contratos')) return 'admin-contratos';
   if (r.startsWith('#/admin/usuarios')) return 'admin-usuarios';
   if (r.startsWith('#/admin/ventanas')) return 'admin-ventanas';
@@ -50,6 +61,8 @@ const idActivo = (ruta) => {
   if (r.startsWith('#/admin/parametros')) return 'admin-parametros';
   if (r.startsWith('#/admin')) return 'inicio';
   if (r.startsWith('#/inicio') || r === '#/' || r === '' || r === '#') return 'inicio';
+  if (r.startsWith('#/informe')) return 'informe';
+  if (r.startsWith('#/cuenta-cobro')) return 'cuenta';
   if (r.startsWith('#/envios')) return 'envios';
   if (r.startsWith('#/solicitudes')) return 'solicitudes';
   if (r.startsWith('#/contratos')) return 'contratos';
@@ -152,10 +165,14 @@ const BarraSuperior = () => {
 /* ===== 4. Barra lateral y navegación inferior ===== */
 const BarraLateral = () => {
   const app = useApp();
-  const activo = idActivo(app.ruta);
+  const activo = idActivo(app.ruta, app);
   return (
     <nav className="nav-lateral" aria-label="Principal">
-      {navDe(app.rol).map((n, i) => (n.seccion ? <div key={`s${i}`} className="nav-seccion">{n.seccion}</div> : (
+      {navDe(app.rol).map((n, i) => (n.seccion ? <div key={`s${i}`} className="nav-seccion">{n.seccion}</div> : navApagado(n, app) ? (
+        <button type="button" key={n.id} className="nav-enlace" disabled title={`${n.etiqueta}: deshabilitada por ahora`}>
+          <Icono nombre={n.icono} /> <span className="flex-1">{n.etiqueta}</span><Icono nombre="candado" className="nav-candado" titulo="Deshabilitada por ahora" />
+        </button>
+      ) : (
         <button type="button" key={n.id} className={`nav-enlace ${activo === n.id ? 'activo' : ''}`} aria-current={activo === n.id ? 'page' : undefined} onClick={() => app.navegar(n.ruta)}>
           <Icono nombre={n.icono} /> <span className="flex-1">{n.etiqueta}</span>{n.contador ? <Insignia n={app.contadores[n.contador]} /> : null}
         </button>
@@ -167,20 +184,22 @@ const BarraLateral = () => {
 const NavInferior = () => {
   const app = useApp();
   const [mas, setMas] = useState(false);
-  const activo = idActivo(app.ruta);
+  const activo = idActivo(app.ruta, app);
   const items = navDe(app.rol).filter((n) => !n.seccion);
   const principales = items.length > 4 ? items.slice(0, 3) : items;
   const resto = items.length > 4 ? items.slice(3) : [];
   return (
     <>
       <nav className="nav-inferior" aria-label="Principal">
-        {principales.map((n) => <button type="button" key={n.id} className={activo === n.id ? 'activo' : ''} aria-current={activo === n.id ? 'page' : undefined} onClick={() => app.navegar(n.ruta)}><Icono nombre={n.icono} />{n.etiqueta}{n.contador ? <Insignia n={app.contadores[n.contador]} /> : null}</button>)}
+        {principales.map((n) => (navApagado(n, app)
+          ? <button type="button" key={n.id} disabled title={`${n.etiqueta}: deshabilitada por ahora`}><Icono nombre={n.icono} />{n.corta || n.etiqueta}</button>
+          : <button type="button" key={n.id} className={activo === n.id ? 'activo' : ''} aria-current={activo === n.id ? 'page' : undefined} onClick={() => app.navegar(n.ruta)}><Icono nombre={n.icono} />{n.corta || n.etiqueta}{n.contador ? <Insignia n={app.contadores[n.contador]} /> : null}</button>))}
         {resto.length ? <button type="button" className={resto.some((n) => n.id === activo) ? 'activo' : ''} onClick={() => setMas(true)}><Icono nombre="menu" />Más</button> : null}
       </nav>
       {mas ? (
         <Modal titulo="Más opciones" onCerrar={() => setMas(false)}>
           <div className="grid gap-1">
-            {resto.map((n) => <button type="button" key={n.id} className={`nav-enlace ${activo === n.id ? 'activo' : ''}`} onClick={() => { setMas(false); app.navegar(n.ruta); }}><Icono nombre={n.icono} /> {n.etiqueta}</button>)}
+            {resto.map((n) => <button type="button" key={n.id} className={`nav-enlace ${activo === n.id ? 'activo' : ''}`} disabled={navApagado(n, app)} onClick={() => { setMas(false); app.navegar(n.ruta); }}><Icono nombre={n.icono} /> {n.etiqueta}</button>)}
             <OpcionVista className="nav-enlace" alElegir={() => setMas(false)} />
             <button type="button" className="nav-enlace" onClick={() => { setMas(false); app.navegar('#/perfil'); }}><Icono nombre="usuario" /> Mi perfil y firma</button>
             <button type="button" className="nav-enlace" onClick={() => { setMas(false); app.alternarTema(); }}><Icono nombre={app.tema === 'oscuro' ? 'sol' : 'luna'} /> Tema {app.tema === 'oscuro' ? 'claro' : 'oscuro'}</button>

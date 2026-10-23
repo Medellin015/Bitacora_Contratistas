@@ -26,6 +26,8 @@ const Enrutador = () => {
     case 'inicio': case '': return rol === 'contratista' ? <PaginaInicioContratista /> : rol === 'admin' ? <PaginaAdminInicio /> : <PaginaRevision />;
     case 'envios': return <PaginaEnvios />;
     case 'solicitudes': return <PaginaSolicitudes />;
+    case 'informe': return rol === 'contratista' ? <PaginaProceso tipo="INFORME_MENSUAL" /> : sinAcceso;
+    case 'cuenta-cobro': return rol === 'contratista' ? <PaginaProceso tipo="CUENTA_COBRO" /> : sinAcceso;
     case 'contrato': return <PaginaContrato />;
     case 'contratos': return rol === 'admin' ? <PaginaAdminContratos /> : esRevision ? <PaginaContratos /> : sinAcceso;
     case 'formulario': return rol === 'contratista' || rol === 'admin' ? <PaginaFormulario /> : sinAcceso;
@@ -306,10 +308,17 @@ const App = () => {
     try {
       const [envios, solicitudes] = await Promise.all([DB.listarEnvios({ rol, uid: u.uid }), DB.listarSolicitudes({ rol, uid: u.uid })]);
       const ahora = new Date();
-      if (rol === 'contratista') setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length + envios.filter((e) => correccionVigente(e, ahora)).length, revision: 0 });
-      else setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length, revision: envios.filter((e) => pendienteDeMi(e, rol, u.uid)).length });
+      if (rol === 'contratista') {
+        // Envíos devueltos para corregir: en el menú van en su proceso (el informe o la cuenta de cobro) o, si
+        // ese proceso está deshabilitado, en Inicio (desde allí se llega a corregirlos).
+        const tipo = (e) => (formularios.find((f) => f.id === e.formularioId) || {}).tipo;
+        const porCorregir = envios.filter((e) => correccionVigente(e, ahora));
+        const informe = porCorregir.filter((e) => tipo(e) === 'INFORME_MENSUAL').length;
+        const cuenta = parametros.cuentaCobroHabilitada ? porCorregir.filter((e) => tipo(e) === 'CUENTA_COBRO').length : 0;
+        setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length + porCorregir.length, revision: 0, informe, cuenta, inicio: porCorregir.length - informe - cuenta });
+      } else setContadores({ solicitudes: solicitudes.filter((s) => s.estado === 'pendiente').length, revision: envios.filter((e) => pendienteDeMi(e, rol, u.uid)).length });
     } catch (e) { console.warn('Contadores:', e); }
-  }, [usuario, rol]);
+  }, [usuario, rol, formularios, parametros]);
   useEffect(() => { if (estado === 'listo') recargarContadores(); }, [estado, recargarContadores]);
 
   const contratoActual = useRef(contratoId); contratoActual.current = contratoId;

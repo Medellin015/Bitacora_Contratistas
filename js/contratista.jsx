@@ -5,9 +5,10 @@
      2. Tablero del período (inicio del contratista)
      3. Mis envíos (+ detalle del envío, descarga, vista previa, solicitar corrección)
      4. Solicitudes del contratista (solicitudes + correcciones pendientes)
-     5. Contrato (información, envíos del contrato, cambios; edición con el motor)
-     6. Formulario (nuevo · corrección · ver)
-     7. Perfil y firma
+     5. Informe de gestión y cuenta de cobro (el del período y los anteriores)
+     6. Contrato (información, envíos del contrato, cambios; edición con el motor)
+     7. Formulario (nuevo · corrección · ver)
+     8. Perfil y firma
    ============================================================================ */
 
 /* ===== 1. Utilidades de página ===== */
@@ -141,7 +142,7 @@ const BannerVentana = () => {
       <Icono nombre={e.estado === 'abierta' ? 'reloj' : 'candado'} />
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2"><strong>{U.nombrePeriodo(app.periodo)}</strong><span className="md:hidden"><ChipVentana enBanner /></span></div>
-        {v ? <p className="text-sm mt-0.5">Ventana {U.textoVentana(v)}.</p> : <p className="text-sm mt-0.5">No hay ventana configurada para este período. Puedes consultar y descargar; las correcciones van por Solicitudes.</p>}
+        {v ? <p className="text-sm mt-0.5">Ventana {U.textoVentana(v)}.</p> : <p className="text-sm mt-0.5">No hay ventana configurada para este período. Puedes consultar y descargar; para corregir algo ya enviado, usa «Solicitar corrección».</p>}
         {aviso ? <div className="prosa text-sm mt-1" dangerouslySetInnerHTML={{ __html: aviso }} /> : null}
       </div>
     </div>
@@ -173,7 +174,7 @@ const PaginaInicioContratista = () => {
   const delPeriodo = envios.filter((e) => e.periodo === app.periodo);
   const correcciones = envios.filter((e) => correccionVigente(e, ahora));
   const completitud = completitudInfo(fInfo, contrato);
-  const formulariosVentana = app.formularios.filter((f) => f.activo && f.tipo !== 'INFO_CONTRATO');
+  const formulariosVentana = app.formularios.filter((f) => f.activo && f.tipo !== 'INFO_CONTRATO' && procesoHabilitado(app, f.tipo));
   const pasos = [
     {
       titulo: 'Información del contrato', estado: completitud.porcentaje === 100 ? 'exito' : 'alerta', icono: 'contrato',
@@ -433,7 +434,105 @@ const SolicitudesContratista = () => {
 };
 const PaginaSolicitudes = () => { const app = useApp(); return app.rol === 'contratista' ? <SolicitudesContratista /> : <SolicitudesRevision />; };
 
-/* ===== 5. Contrato ===== */
+/* ===== 5. Informe de gestión y cuenta de cobro ===== */
+// Una página por proceso del menú del contratista: el formulario del período (diligenciar, continuar o
+// corregir, y su Word) y los de períodos anteriores del contrato.
+const PROCESOS = {
+  INFORME_MENSUAL: { titulo: 'Generación de informe de gestión', icono: 'formulario', cual: 'el informe', anteriores: 'Informes anteriores', ninguno: 'Todavía no has enviado informes en este contrato.' },
+  CUENTA_COBRO: { titulo: 'Cuenta de cobro', icono: 'envios', cual: 'la cuenta de cobro', anteriores: 'Cuentas de cobro anteriores', ninguno: 'Todavía no has enviado cuentas de cobro en este contrato.' },
+};
+const PaginaProceso = ({ tipo }) => {
+  const app = useApp();
+  const p = PROCESOS[tipo];
+  const contrato = app.contrato;
+  const formulario = app.formularios.find((f) => f.activo && f.tipo === tipo);
+  const habilitado = procesoHabilitado(app, tipo);
+  const ahora = useReloj(60000);
+  const [detalle, setDetalle] = useState(null);
+  const [solicitar, setSolicitar] = useState(null);
+  const { datos, cargando, recargar } = useCarga(async () => {
+    if (!contrato || !formulario || !habilitado) return null;
+    const [envios, borrador] = await Promise.all([
+      DB.listarEnvios({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id }),
+      DB.obtenerBorrador(DB.idBorrador(app.usuario.id, contrato.id, formulario.id, app.periodo)).catch(() => null),
+    ]);
+    return { envios, borrador };
+  }, [contrato && contrato.id, formulario && formulario.id, app.periodo, app.usuario.id, habilitado]);
+  if (!habilitado) return <Vacio icono="candado" titulo={`${p.titulo}: deshabilitada por ahora`} texto="Cuando el administrador la habilite, podrás diligenciarla desde aquí." accion={<Boton onClick={() => app.navegar('#/inicio')}>Ir al inicio</Boton>} />;
+  if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
+  if (!formulario) return <Vacio icono={p.icono} titulo={p.titulo} texto="El administrador aún no ha publicado este formulario." />;
+  const envios = (datos && datos.envios) || [];
+  const delPeriodo = envios.filter((e) => e.periodo === app.periodo);
+  const ultimo = delPeriodo[0];
+  const borrador = datos && datos.borrador;
+  const abierta = !requiereVentana(formulario) || U.estadoVentana(app.ventana, formulario.id, ahora).estado === 'abierta';
+  const limite = limiteDe(formulario);
+  const puedeMas = limite == null || delPeriodo.length < limite;
+  const enContrato = !!U.recortarPeriodo(app.periodo, contrato);
+  const porCorregir = envios.filter((e) => correccionVigente(e, ahora));
+  const vencidas = envios.filter((e) => e.enCorreccion && !correccionVigente(e, ahora));
+  const diligenciar = () => app.navegar(`#/formulario/${formulario.id}?modo=nuevo`);
+  const acciones = (e, compacto) => {
+    const tam = compacto ? 'xs' : 'sm';
+    return <>
+      <AccionesEnvio envio={e} compacto={compacto} />
+      <Boton tam={tam} variante="fantasma" icono="lista" onClick={() => setDetalle(e)}>Detalle</Boton>
+      {correccionVigente(e, ahora) ? <Boton tam={tam} variante="acento" icono="editar" onClick={() => app.navegar(`#/formulario/${e.formularioId}?modo=correccion&envio=${encodeURIComponent(e.id)}`)}>Corregir</Boton> : null}
+      {!e.enCorreccion ? <Boton tam={tam} variante="fantasma" icono="chat" onClick={() => setSolicitar(e)}>Solicitar corrección</Boton> : null}
+    </>;
+  };
+  let delMes;
+  if (ultimo) {
+    delMes = (
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <ChipEstado estado={ultimo.estado} /><span className="mono text-sm">No. {ultimo.consecutivo}</span><span className="text-sm texto-2">enviado {U.fechaHora(ultimo.enviadoEn)}</span>
+          {correccionVigente(ultimo, ahora) ? <Chip tipo="alerta" icono="reloj">corregir hasta {U.fechaHora(ultimo.fechaLimiteCorreccion)}</Chip> : null}
+        </div>
+        <div className="flex flex-wrap gap-2">{acciones(ultimo, false)}{puedeMas && abierta && enContrato ? <Boton tam="sm" variante="primario" icono={borrador ? 'editar' : 'mas'} onClick={diligenciar}>{borrador ? 'Continuar otro' : 'Diligenciar otro'}</Boton> : null}</div>
+      </div>
+    );
+  } else if (!enContrato) {
+    delMes = <Alerta tipo="info">{U.nombrePeriodo(app.periodo)} está fuera de las fechas del contrato. Elige otro período en la barra superior.</Alerta>;
+  } else if (!abierta) {
+    delMes = <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(app.periodo)} no está abierta.</strong> Fuera de la ventana solo se consulta.</Alerta>;
+  } else {
+    delMes = (
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm texto-2">{borrador ? `Tienes un borrador guardado ${U.tiempoRelativo(borrador.actualizadoEn)}.` : `Aún no has diligenciado ${p.cual} de ${U.nombrePeriodo(app.periodo)}.`}</span>
+        <Boton variante="primario" icono={borrador ? 'editar' : 'mas'} onClick={diligenciar}>{borrador ? 'Continuar' : 'Diligenciar'}</Boton>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <Encabezado titulo={p.titulo} subtitulo={`${contrato.numero}${contrato.etiqueta ? ` · ${contrato.etiqueta}` : ''} · ${U.nombrePeriodo(app.periodo)}`} acciones={<Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()} titulo="Actualizar">Actualizar</Boton>} />
+      <BannerVentana />
+      {porCorregir.length ? <Alerta tipo="alerta" className="mb-4"><strong>{porCorregir.length === 1 ? `Tienes ${p.cual} de ${U.nombrePeriodo(porCorregir[0].periodo)} por corregir` : `Tienes ${porCorregir.length} por corregir`}</strong> (botón «Corregir»), antes del plazo que fijó el revisor.</Alerta> : null}
+      {vencidas.length ? <Alerta tipo="alerta" className="mb-4">{vencidas.length} {U.plural(vencidas.length, 'corrección venció', 'correcciones vencieron')} sin reenviar. Pide al revisor un nuevo plazo en <button type="button" className="underline" onClick={() => app.navegar('#/solicitudes?pestana=correcciones')}>Solicitudes</button>.</Alerta> : null}
+      <div className="grid gap-4">
+        <div className="tarjeta">
+          <div className="tarjeta-cabecera"><h2>{formulario.nombre} · {U.nombrePeriodo(app.periodo)}</h2>{cargando ? <Icono nombre="cargando" className="girando texto-3" /> : null}</div>
+          <div className="tarjeta-cuerpo">{cargando && !datos ? <Esqueleto filas={2} /> : delMes}</div>
+        </div>
+        <div className="tarjeta">
+          <div className="tarjeta-cabecera"><h2>{p.anteriores}</h2></div>
+          <Tabla cargando={cargando} filas={envios} vacio={<Vacio icono={p.icono} titulo="Sin envíos" texto={p.ninguno} />}
+            columnas={[
+              { titulo: 'Período', render: (e) => <span className="mono">{U.nombrePeriodo(e.periodo)}</span> },
+              { titulo: 'No.', render: (e) => <span className="mono">{e.consecutivo}</span> },
+              { titulo: 'Estado', render: (e) => <span className="flex items-center gap-1 flex-wrap"><ChipEstado estado={e.estado} />{correccionVigente(e, ahora) ? <Chip tipo="alerta" icono="reloj">hasta {U.fechaCorta(e.fechaLimiteCorreccion)}</Chip> : null}</span> },
+              { titulo: 'Enviado', render: (e) => <span className="mono text-xs">{U.fechaHora(e.enviadoEn)}</span> },
+            ]} acciones={(e) => acciones(e, true)} />
+        </div>
+      </div>
+      {detalle ? <DetalleEnvio envio={detalle} onCerrar={() => setDetalle(null)} /> : null}
+      {solicitar ? <ModalNuevaSolicitud envioInicial={solicitar} onCerrar={() => setSolicitar(null)} onCreada={() => { setSolicitar(null); recargar(); app.recargarContadores(); }} /> : null}
+    </div>
+  );
+};
+
+/* ===== 6. Contrato ===== */
 const VistaInfoContrato = ({ contrato }) => {
   const app = useApp();
   const f = formularioInfo(app);
@@ -553,7 +652,7 @@ const PaginaContrato = () => {
   );
 };
 
-/* ===== 6. Formulario ===== */
+/* ===== 7. Formulario ===== */
 const PaginaFormulario = () => {
   const app = useApp();
   const formularioId = app.ruta.params[0];
@@ -674,11 +773,15 @@ const PaginaFormulario = () => {
     } catch (e) { if (montado.current) setEstadoGuardado({ fecha: null, guardando: false, error: 'no se guardó en el servidor (queda copia local)' }); }
   };
   // Bloqueos previos (también se validan en las reglas).
-  if (esCorreccion && (!envio || !correccionVigente(envio, ahora))) return <Alerta tipo="alerta">Este envío no está en corrección o el plazo venció. Pide un nuevo plazo desde Solicitudes.</Alerta>;
+  if (esCorreccion && (!envio || !correccionVigente(envio, ahora))) return <Alerta tipo="alerta">Este envío no está en corrección o el plazo venció. Pide un nuevo plazo en <button type="button" className="underline" onClick={() => app.navegar('#/solicitudes?pestana=correcciones')}>Solicitudes</button>.</Alerta>;
   if (esLectura && !envio) return <Alerta tipo="error">El envío no existe.</Alerta>;
   if (!esCorreccion && !esLectura) {
-    if (!ventanaOk) return <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(periodo)} no está abierta</strong> para {formulario.nombre}. Fuera de ventana solo se consulta; las correcciones van por Solicitudes.</Alerta>;
-    if (limite != null && enviosPeriodo.length >= limite) return <Alerta tipo="info"><strong>Ya enviaste {formulario.nombre} de {U.nombrePeriodo(periodo)}.</strong> Puedes verlo en Mis envíos; si necesitas cambiarlo, crea una solicitud de corrección. <div className="mt-2 flex gap-2"><Boton tam="sm" onClick={() => app.navegar('#/envios')}>Mis envíos</Boton><Boton tam="sm" onClick={() => app.navegar('#/solicitudes')}>Solicitudes</Boton></div></Alerta>;
+    if (!enNombreDeOtro && !procesoHabilitado(app, formulario.tipo)) return <Vacio icono="candado" titulo={`${formulario.nombre}: deshabilitada por ahora`} texto="Cuando el administrador la habilite, podrás diligenciarla." accion={<Boton onClick={() => app.navegar('#/inicio')}>Ir al inicio</Boton>} />;
+    if (!ventanaOk) return <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(periodo)} no está abierta</strong> para {formulario.nombre}. Fuera de ventana solo se consulta; para corregir algo ya enviado, usa «Solicitar corrección».</Alerta>;
+    if (limite != null && enviosPeriodo.length >= limite) {
+      const proceso = !enNombreDeOtro && navDe(app.rol).find((n) => n.proceso === formulario.tipo);
+      return <Alerta tipo="info"><strong>Ya enviaste {formulario.nombre} de {U.nombrePeriodo(periodo)}.</strong> {proceso ? <>Puedes verlo y descargarlo en «{proceso.etiqueta}»; si necesitas cambiarlo, allí mismo puedes solicitar una corrección. <div className="mt-2 flex gap-2"><Boton tam="sm" onClick={() => app.navegar(proceso.ruta)}>{proceso.etiqueta}</Boton></div></> : <>Puedes verlo en Mis envíos; si necesitas cambiarlo, crea una solicitud de corrección. <div className="mt-2 flex gap-2"><Boton tam="sm" onClick={() => app.navegar('#/envios')}>Mis envíos</Boton><Boton tam="sm" onClick={() => app.navegar('#/solicitudes')}>Solicitudes</Boton></div></>}</Alerta>;
+    }
     if (!rango) return <Alerta tipo="alerta">El período {U.nombrePeriodo(periodo)} está fuera de las fechas del contrato.</Alerta>;
     if (borrador && decisionBorrador === null) {
       return (
@@ -801,7 +904,7 @@ const PaginaFormulario = () => {
   );
 };
 
-/* ===== 7. Perfil y firma ===== */
+/* ===== 8. Perfil y firma ===== */
 const PaginaPerfil = () => {
   const app = useApp();
   const u = app.usuario;

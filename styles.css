@@ -304,6 +304,10 @@ html[data-tema="oscuro"] .tarjeta, html[data-tema="oscuro"] .indicador, html[dat
 .nav-enlace svg { width: 19px; height: 19px; flex: none; }
 .nav-enlace:hover { background: var(--superficie-2); color: var(--texto); }
 .nav-enlace.activo { border-left-color: var(--acento); background: var(--primario-suave); color: var(--primario); font-weight: 600; }
+/* Un proceso que el administrador aún no habilitó (p. ej. la cuenta de cobro): visible, en gris y sin abrir. */
+.nav-enlace:disabled, .nav-inferior button:disabled { color: var(--texto-3); opacity: 0.8; cursor: not-allowed; }
+.nav-enlace:disabled:hover { background: transparent; color: var(--texto-3); }
+.nav-enlace .nav-candado { width: 15px; height: 15px; }
 .nav-seccion { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--texto-3); padding: 1.1rem 1.25rem 0.4rem; font-weight: 600; }
 .nav-lateral > .mt-auto { padding-left: 1.25rem; }
 /* En la hoja «Más» del celular los enlaces conservan esquinas y sangría propias. */
