@@ -379,7 +379,11 @@ html[data-tema="oscuro"] .tarjeta, html[data-tema="oscuro"] .indicador, html[dat
   .barra-fija > .barra-fija-acciones { display: contents; }
   .barra-fija > .barra-fija-acciones > .btn { flex: 1 1 auto; min-width: 0; padding: 0 0.7rem; order: 1; }
   .barra-fija > .barra-fija-acciones > .btn-primario { flex: 1 1 100%; min-height: 48px; order: 2; }
+  /* Etiqueta corta en el celular («Word» en vez de «Descargar Word»): las acciones caben en una fila. */
+  .barra-fija .etiqueta-larga { display: none; }
+  .barra-fija .etiqueta-corta { display: inline; }
 }
+.etiqueta-corta { display: none; }
 .pregunta { padding: 0.9rem 0; border-bottom: 1px solid var(--borde); }
 .pregunta:last-child { border-bottom: none; }
 .separador-pregunta { padding: 1.1rem 0 0.4rem; border-bottom: 1px solid var(--borde); margin-bottom: 0.25rem; }
@@ -433,6 +437,9 @@ html[data-tema="oscuro"] .tarjeta, html[data-tema="oscuro"] .indicador, html[dat
 /* Volver arriba, banners y otros */
 .volver-arriba { position: fixed; right: 1rem; bottom: calc(var(--nav-inferior-alto) + 4.5rem + env(safe-area-inset-bottom)); z-index: 35; width: 42px; height: 42px; border-radius: var(--radio-g); border: 1px solid var(--borde); background: var(--superficie); box-shadow: var(--sombra-2); display: grid; place-items: center; color: var(--texto-2); }
 @media (min-width: 1024px) { .volver-arriba { bottom: 1.5rem; } }
+/* Con la barra de acciones de un formulario, el botón sube para no tapar «Word» ni «Finalizar y enviar». */
+@media (max-width: 767px) { body:has(.barra-fija) .volver-arriba { bottom: calc(var(--nav-inferior-alto) + 11rem + env(safe-area-inset-bottom)); } }
+@media (min-width: 1024px) { body:has(.barra-fija) .volver-arriba { bottom: 6rem; } }
 .banner-demo { background: var(--acento-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--acento) 45%, transparent); font-size: 0.8rem; font-weight: 500; padding: 0.35rem 0.75rem; text-align: center; }
 .banner-vista { background: var(--primario-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--primario) 35%, transparent); font-size: 0.8rem; font-weight: 500; padding: 0.35rem 0.75rem; text-align: center; }
 .firma-vista { max-width: 240px; max-height: 80px; object-fit: contain; background: #fff; border: 1px solid var(--borde); border-radius: var(--radio); padding: 4px; }
