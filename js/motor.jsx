@@ -733,9 +733,10 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
  *  controlRef: la página recibe { pendiente(), vaciar() } para saber si hay un autoguardado
  *  pendiente y hacerlo ya (al cerrar la sesión o la pestaña)
  *  onEnviar(respuestasFinales) · onVistaPrevia(respuestasFinales) · textoEnviar · soloLectura
+ *  onDescargar(respuestasFinales): «Descargar Word» con lo que va diligenciado (sin enviar)
  *  capituloInicial
  */
-const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
+const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, onDescargar, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
@@ -749,6 +750,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const [subidas, setSubidas] = useState({});
   const [intentoEnvio, setIntentoEnvio] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  const [descargando, setDescargando] = useState(false);
   const ahoraRef = useRef(false);   // el próximo autoguardado va sin esperar (se adjuntó un archivo)
   const estadoMotor = useMemo(() => ({
     subidas: (clave) => subidas[clave] || 0,
@@ -1006,6 +1008,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
             <div className="barra-fija-acciones flex gap-2 flex-wrap">
               {acciones}
               {onVistaPrevia ? <Boton icono="ojo" onClick={() => onVistaPrevia(respuestasFinales())}>Vista previa</Boton> : null}
+              {onDescargar ? <Boton icono="word" cargando={descargando} titulo="Descarga el Word con lo que llevas, sin enviarlo" onClick={async () => { setDescargando(true); try { await onDescargar(respuestasFinales()); } finally { setDescargando(false); } }}><span className="etiqueta-larga">Descargar Word</span><span className="etiqueta-corta">Word</span></Boton> : null}
               {onEnviar ? <Boton variante="primario" icono="enviar" cargando={enviando} onClick={enviar}>{textoEnviar}</Boton> : null}
             </div>
           </div>

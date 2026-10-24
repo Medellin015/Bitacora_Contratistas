@@ -85,10 +85,17 @@ guardan por id de pregunta, así que envíos y borradores siguen sirviendo.
 El contratista ve cuatro apartados: **Inicio** (el tablero del período),
 **Cuenta de cobro**, **Generación de informe de gestión** y **Contrato**.
 
-- **Generación de informe de gestión** muestra el informe del período elegido
-  arriba (diligenciar, continuar el borrador o corregir) con su Word y vista
-  previa, y los informes anteriores del contrato, donde también se pide una
-  corrección. La **Cuenta de cobro** funciona igual cuando está habilitada.
+- **Generación de informe de gestión** es donde se hace el informe: mientras
+  el del período no se haya enviado (y la ventana esté abierta), el formulario
+  está ahí mismo y abre en las **actividades** del contrato, cada una con su
+  % de ejecución, descripción y evidencia. Se guarda solo (al volver sigue lo
+  que se dejó, con **Empezar de nuevo** para descartarlo) y la barra de abajo
+  trae **Vista previa**, **Descargar Word** (el Word institucional con lo que
+  va diligenciado, sin enviarlo; en el celular el botón dice «Word») y
+  **Finalizar y enviar**. Ya enviado, la página muestra su estado con el Word,
+  el detalle y «Solicitar corrección»; debajo quedan los informes anteriores
+  del contrato. El «Diligenciar» de Inicio lleva a esta página. La **Cuenta de
+  cobro** funciona igual cuando está habilitada.
 - **Cuenta de cobro: deshabilitada por ahora.** Se ve en el menú, en gris, y no
   se pueden diligenciar cuentas de cobro nuevas (las ya enviadas se siguen
   viendo, descargando y corrigiendo). Se habilita en **Parámetros → Procesos del
