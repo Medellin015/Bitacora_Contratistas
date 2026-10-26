@@ -93,8 +93,12 @@ El contratista ve cuatro apartados: **Inicio** (el tablero del período),
   trae **Vista previa**, **Descargar Word** (el Word institucional con lo que
   va diligenciado, sin enviarlo; en el celular el botón dice «Word») y
   **Finalizar y enviar**. Ya enviado, la página muestra su estado con el Word,
-  el detalle y «Solicitar corrección»; debajo quedan los informes anteriores
-  del contrato. El «Diligenciar» de Inicio lleva a esta página. La **Cuenta de
+  el detalle y «Solicitar corrección» y, debajo, **lo que se envió**: las
+  mismas actividades, de solo lectura. Si el revisor abre una corrección (al
+  devolverlo o al aprobar la solicitud), las actividades se vuelven editables
+  ahí mismo, con la observación del revisor, **Descargar Word** y **Reenviar
+  corrección**. Al final quedan los informes anteriores del contrato. El
+  «Diligenciar» y el «Corregir» de Inicio llevan a esta página. La **Cuenta de
   cobro** funciona igual cuando está habilitada.
 - **Cuenta de cobro: deshabilitada por ahora.** Se ve en el menú, en gris, y no
   se pueden diligenciar cuentas de cobro nuevas (las ya enviadas se siguen

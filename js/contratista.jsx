@@ -191,9 +191,11 @@ const PaginaInicioContratista = () => {
       if (ultimo) { detalle = <span className="flex items-center gap-2 flex-wrap"><ChipEstado estado={ultimo.estado} /><span className="mono text-xs">No. {ultimo.consecutivo}</span>{correccionVigente(ultimo, ahora) ? <span className="text-xs" style={{ color: 'var(--alerta)' }}>plazo {U.fechaHora(ultimo.fechaLimiteCorreccion)}</span> : null}</span>; estado = ultimo.estado === 'aprobado' ? 'exito' : (ultimo.enCorreccion ? 'alerta' : 'primario'); }
       else if (borradores[f.id]) { detalle = `Borrador guardado ${U.tiempoRelativo(borradores[f.id].actualizadoEn)}`; estado = 'alerta'; }
       else detalle = abierta ? 'Pendiente de diligenciar' : 'Fuera de ventana';
-      if (ultimo && correccionVigente(ultimo, ahora)) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(`#/formulario/${f.id}?modo=correccion&envio=${encodeURIComponent(ultimo.id)}`)}>Corregir</Boton>;
+      // El informe y la cuenta de cobro se diligencian y se corrigen en su página del menú.
+      const proceso = navDe(app.rol).find((n) => n.proceso === f.tipo);
+      if (ultimo && correccionVigente(ultimo, ahora)) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(proceso ? proceso.ruta : `#/formulario/${f.id}?modo=correccion&envio=${encodeURIComponent(ultimo.id)}`)}>Corregir</Boton>;
       else if (ultimo && !puedeMas) accion = <AccionesEnvio envio={ultimo} compacto />;
-      else if (abierta) { const proceso = navDe(app.rol).find((n) => n.proceso === f.tipo); accion = <Boton tam="sm" variante="primario" icono={borradores[f.id] ? 'editar' : 'mas'} onClick={() => app.navegar(proceso ? proceso.ruta : `#/formulario/${f.id}?modo=nuevo`)}>{borradores[f.id] ? 'Continuar' : 'Diligenciar'}</Boton>; }
+      else if (abierta) accion = <Boton tam="sm" variante="primario" icono={borradores[f.id] ? 'editar' : 'mas'} onClick={() => app.navegar(proceso && !ultimo ? proceso.ruta : `#/formulario/${f.id}?modo=nuevo`)}>{borradores[f.id] ? 'Continuar' : 'Diligenciar'}</Boton>;
       else accion = <Boton tam="sm" disabled icono="candado">Ventana cerrada</Boton>;
       return { titulo: f.nombre, estado, icono: f.tipo === 'CUENTA_COBRO' ? 'envios' : 'formulario', detalle, accion };
     }),
@@ -435,12 +437,13 @@ const SolicitudesContratista = () => {
 const PaginaSolicitudes = () => { const app = useApp(); return app.rol === 'contratista' ? <SolicitudesContratista /> : <SolicitudesRevision />; };
 
 /* ===== 5. Informe de gestión y cuenta de cobro ===== */
-// Una página por proceso del menú del contratista. Mientras el del período no se haya enviado, el
-// formulario se diligencia aquí mismo (empieza en las actividades, se guarda solo y se descarga en Word);
-// enviado, se ve su estado con el Word. Debajo, los de períodos anteriores del contrato.
+// Una página por proceso del menú del contratista, con el formulario del período en la página misma
+// (empieza en las actividades): sin enviar, se diligencia (se guarda solo y se descarga en Word); con una
+// corrección abierta, se corrige; enviado, se ve tal como quedó, debajo de su estado y su Word. Al final,
+// los de períodos anteriores del contrato.
 const PROCESOS = {
-  INFORME_MENSUAL: { titulo: 'Generación de informe de gestión', icono: 'formulario', cual: 'el informe', anteriores: 'Informes anteriores', ninguno: 'Todavía no has enviado informes en este contrato.', ayuda: 'Llena cada actividad; se guarda solo. Cuando esté listo, descarga el Word o envíalo al revisor.' },
-  CUENTA_COBRO: { titulo: 'Cuenta de cobro', icono: 'envios', cual: 'la cuenta de cobro', anteriores: 'Cuentas de cobro anteriores', ninguno: 'Todavía no has enviado cuentas de cobro en este contrato.', ayuda: 'Llena cada paso; se guarda sola. Cuando esté lista, descarga el Word o envíala al revisor.' },
+  INFORME_MENSUAL: { titulo: 'Generación de informe de gestión', icono: 'formulario', cual: 'el informe', lo: 'lo', anteriores: 'Informes anteriores', ninguno: 'Todavía no has enviado informes en este contrato.', ayuda: 'Llena cada actividad; se guarda solo. Cuando esté listo, descarga el Word o envíalo al revisor.' },
+  CUENTA_COBRO: { titulo: 'Cuenta de cobro', icono: 'envios', cual: 'la cuenta de cobro', lo: 'la', anteriores: 'Cuentas de cobro anteriores', ninguno: 'Todavía no has enviado cuentas de cobro en este contrato.', ayuda: 'Llena cada paso; se guarda sola. Cuando esté lista, descarga el Word o envíala al revisor.' },
 };
 const PaginaProceso = ({ tipo }) => {
   const app = useApp();
@@ -470,12 +473,22 @@ const PaginaProceso = ({ tipo }) => {
   const porCorregir = envios.filter((e) => correccionVigente(e, ahora));
   const vencidas = envios.filter((e) => e.enCorreccion && !correccionVigente(e, ahora));
   const diligenciar = () => app.navegar(`#/formulario/${formulario.id}?modo=nuevo`);
+  // El formulario del período en la página: nuevo (sin enviar, dentro del contrato y con la ventana
+  // abierta), la corrección abierta o, enviado, para verlo.
+  const enPagina = !vigentes ? null
+    : !ultimo ? (enContrato && abierta ? { modo: 'nuevo' } : null)
+      : { modo: correccionVigente(ultimo, ahora) ? 'correccion' : 'ver', envioId: ultimo.id };
+  const corregir = (e) => {
+    const abajo = enPagina && enPagina.modo === 'correccion' && enPagina.envioId === e.id && document.getElementById('formulario-del-periodo');
+    if (abajo) abajo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else app.navegar(`#/formulario/${e.formularioId}?modo=correccion&envio=${encodeURIComponent(e.id)}`);
+  };
   const acciones = (e, compacto) => {
     const tam = compacto ? 'xs' : 'sm';
     return <>
       <AccionesEnvio envio={e} compacto={compacto} />
       <Boton tam={tam} variante="fantasma" icono="lista" onClick={() => setDetalle(e)}>Detalle</Boton>
-      {correccionVigente(e, ahora) ? <Boton tam={tam} variante="acento" icono="editar" onClick={() => app.navegar(`#/formulario/${e.formularioId}?modo=correccion&envio=${encodeURIComponent(e.id)}`)}>Corregir</Boton> : null}
+      {correccionVigente(e, ahora) ? <Boton tam={tam} variante="acento" icono="editar" onClick={() => corregir(e)}>Corregir</Boton> : null}
       {!e.enCorreccion ? <Boton tam={tam} variante="fantasma" icono="chat" onClick={() => setSolicitar(e)}>Solicitar corrección</Boton> : null}
     </>;
   };
@@ -495,8 +508,10 @@ const PaginaProceso = ({ tipo }) => {
   } else if (!abierta) {
     delMes = <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(app.periodo)} no está abierta.</strong> Fuera de la ventana solo se consulta.</Alerta>;
   }
-  // Sin enviar, con la ventana abierta y dentro del contrato: se diligencia aquí.
-  const aqui = !!vigentes && !ultimo && enContrato && abierta;
+  const textoEnPagina = !enPagina ? null
+    : enPagina.modo === 'nuevo' ? { titulo: `${formulario.nombre} · ${U.nombrePeriodo(app.periodo)}`, ayuda: p.ayuda }
+      : enPagina.modo === 'correccion' ? { titulo: `Corrige ${p.cual}`, ayuda: `Cambia lo que pidió el revisor y reenvía${p.lo} antes del ${U.fechaHora(ultimo.fechaLimiteCorreccion)}. Los cambios se guardan al reenviar${p.lo}; también puedes descargar el Word.` }
+        : { titulo: 'Lo que enviaste', ayuda: ultimo.enCorreccion ? `El plazo para corregir${p.lo} venció: pide uno nuevo en Solicitudes.` : `Para cambiar${p.lo}, usa «Solicitar corrección»; cuando el revisor la apruebe, ${p.lo} corriges aquí mismo.` };
   return (
     <div>
       <Encabezado titulo={p.titulo} subtitulo={`${contrato.numero}${contrato.etiqueta ? ` · ${contrato.etiqueta}` : ''} · ${U.nombrePeriodo(app.periodo)}`} acciones={<Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()} titulo="Actualizar">Actualizar</Boton>} />
@@ -504,17 +519,18 @@ const PaginaProceso = ({ tipo }) => {
       {porCorregir.length ? <Alerta tipo="alerta" className="mb-4"><strong>{porCorregir.length === 1 ? `Tienes ${p.cual} de ${U.nombrePeriodo(porCorregir[0].periodo)} por corregir` : `Tienes ${porCorregir.length} por corregir`}</strong> (botón «Corregir»), antes del plazo que fijó el revisor.</Alerta> : null}
       {vencidas.length ? <Alerta tipo="alerta" className="mb-4">{vencidas.length} {U.plural(vencidas.length, 'corrección venció', 'correcciones vencieron')} sin reenviar. Pide al revisor un nuevo plazo en <button type="button" className="underline" onClick={() => app.navegar('#/solicitudes?pestana=correcciones')}>Solicitudes</button>.</Alerta> : null}
       <div className="grid gap-4">
-        {aqui ? (
-          <section className="grid gap-3" aria-label={`${formulario.nombre} de ${U.nombrePeriodo(app.periodo)}`}>
-            <div><h2>{formulario.nombre} · {U.nombrePeriodo(app.periodo)}</h2><p className="text-sm texto-2 mt-0.5">{p.ayuda}</p></div>
-            <FormularioEnvio key={`${contrato.id}-${app.periodo}`} formularioId={formulario.id} modo="nuevo" incrustado alEnviar={recargar} />
-          </section>
-        ) : (
+        {enPagina && enPagina.modo === 'nuevo' ? null : (
           <div className="tarjeta">
             <div className="tarjeta-cabecera"><h2>{formulario.nombre} · {U.nombrePeriodo(app.periodo)}</h2>{cargando ? <Icono nombre="cargando" className="girando texto-3" /> : null}</div>
             <div className="tarjeta-cuerpo">{vigentes ? delMes : error ? <Alerta tipo="error"><strong>No se pudieron cargar tus envíos.</strong> Revisa la conexión y vuelve a intentarlo. <div className="mt-2"><Boton tam="sm" icono="refrescar" onClick={() => recargar()}>Reintentar</Boton></div></Alerta> : <Esqueleto filas={2} />}</div>
           </div>
         )}
+        {enPagina ? (
+          <section id="formulario-del-periodo" className="grid gap-3 scroll-mt-20" aria-label={`${formulario.nombre} de ${U.nombrePeriodo(app.periodo)}`}>
+            <div><h2>{textoEnPagina.titulo}</h2><p className="text-sm texto-2 mt-0.5">{textoEnPagina.ayuda}</p></div>
+            <FormularioEnvio key={`${contrato.id}-${app.periodo}-${enPagina.modo}-${enPagina.envioId || ''}`} formularioId={formulario.id} modo={enPagina.modo} envioId={enPagina.envioId || ''} incrustado alEnviar={recargar} />
+          </section>
+        ) : null}
         <div className="tarjeta">
           <div className="tarjeta-cabecera"><h2>{p.anteriores}</h2></div>
           <Tabla cargando={cargando} filas={envios} vacio={<Vacio icono={p.icono} titulo="Sin envíos" texto={p.ninguno} />}
@@ -665,10 +681,11 @@ const PaginaFormulario = () => {
   return <FormularioEnvio formularioId={app.ruta.params[0]} modo={q.modo || 'nuevo'} envioId={q.envio ? decodeURIComponent(q.envio) : ''} />;
 };
 // El formulario de un envío (nuevo · corrección · ver), en su propia pantalla (#/formulario/…) o
-// «incrustado» en la página de su proceso: allí empieza en las actividades, sigue el borrador sin
-// preguntar y, al enviar, avisa a la página (alEnviar) en vez de cambiar de pantalla.
+// «incrustado» en la página de su proceso: allí empieza en las actividades, uno nuevo sigue el borrador
+// sin preguntar y, al enviar o reenviar, avisa a la página (alEnviar) en vez de cambiar de pantalla.
 const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustado = false, alEnviar }) => {
   const app = useApp();
+  const sigueBorrador = incrustado && modo === 'nuevo';
   const formulario = app.formularios.find((f) => f.id === formularioId);
   const contratoBarra = app.contrato;
   const [previa, setPrevia] = useState(null);
@@ -686,12 +703,13 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   useEffect(() => () => { montado.current = false; }, []);
   // Salir con un archivo subiendo, o de una corrección con cambios (no tiene borrador), se confirma:
   // con «Salir», los menús, Atrás, el contrato, el período o al cerrar la pestaña. Cerrar o recargar
-  // la pestaña con un autoguardado pendiente también avisa (y ese guardado se hace ya).
+  // la pestaña con un autoguardado pendiente también avisa (y ese guardado se hace ya). Incrustado,
+  // cambiar el período o el contrato de la barra también quita la corrección de la página.
   useEffect(() => {
     const vaciar = () => (control.current ? control.current.vaciar() : null);
     app.fijarGuardaSalida((tipo) => {
       // Una corrección o consulta usa el contrato y el período del envío: la barra no la cambia.
-      if (envioId && (tipo === 'contrato' || tipo === 'periodo')) return null;
+      if (envioId && !incrustado && (tipo === 'contrato' || tipo === 'periodo')) return null;
       const archivo = subiendo.current > 0;
       const cambios = modo === 'correccion' && hayCambios.current;
       if (archivo && cambios) return { titulo: 'Salir sin reenviar', mensaje: 'Hay un archivo subiendo que no quedará adjunto y, en una corrección, los cambios solo se guardan al reenviarla. Si sales ahora, se pierden.' };
@@ -749,7 +767,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const borradorSubido = useRef(null);
   useEffect(() => {
     const b = datos && datos.borrador;
-    if (!incrustado || !b || !b.soloLocal || borradorSubido.current === datos) return;
+    if (!sigueBorrador || !b || !b.soloLocal || borradorSubido.current === datos) return;
     borradorSubido.current = datos;
     DB.guardarBorrador(datos.idBorrador, { uid: app.usuario.id, contratoId: datos.contratoId, formularioId: datos.formularioIdBorrador, periodo: datos.periodo, respuestas: b.respuestas, capituloActual: b.capituloActual || null }).catch(() => {});
   }, [datos]); // eslint-disable-line
@@ -764,7 +782,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const { envio, periodo, idBorrador, contratoId, formularioIdBorrador, borrador, contador, enviosPeriodo, ultimo, usuarioFormulario } = datos;
   // El contrato al día (p. ej. tras «Actualizar datos»), del mismo id que el cargado.
   const contrato = app.contratos.find((c) => c.id === contratoId) || datos.contrato;
-  const decisionBorrador = decision.para === datos ? decision.valor : (incrustado && borrador ? 'continuar' : null);
+  const decisionBorrador = decision.para === datos ? decision.valor : (sigueBorrador && borrador ? 'continuar' : null);
   const setDecisionBorrador = (valor) => setDecision({ para: datos, valor });
   const enNombreDeOtro = app.rol !== 'contratista';
   const ahora = new Date();
@@ -928,7 +946,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       {incrustado ? null : <Encabezado titulo={titulo} subtitulo={`${contrato.numero} · ${U.nombrePeriodo(periodo)}${rango ? ` · ${U.textoPeriodo(rango.desde, rango.hasta)}` : ''}${esCorreccion ? ` · plazo ${U.fechaHora(envio.fechaLimiteCorreccion)}` : ''}`} migas={[{ texto: 'Inicio', onClick: () => app.navegar('#/inicio') }, { texto: formulario.nombre }]} />}
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
-      {incrustado && decisionBorrador === 'continuar' && borrador ? (
+      {sigueBorrador && decisionBorrador === 'continuar' && borrador ? (
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <span className="text-sm texto-2">Sigues con lo que dejaste guardado.</span>
           <Boton tam="sm" variante="fantasma" icono="basura" onClick={empezarDeNuevo}>Empezar de nuevo</Boton>
