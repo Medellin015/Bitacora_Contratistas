@@ -535,7 +535,9 @@ const ModalVariasVentanas = ({ existentes, onCerrar, onGuardado }) => {
 };
 const PaginaAdminVentanas = () => {
   const app = useApp();
-  const [modal, setModal] = useState(null);
+  // «?abrir=varios» (el atajo del aviso del período en la vista de contratista) abre «Abrir varios meses».
+  const [modal, setModal] = useState(() => ((app.ruta.query || {}).abrir === 'varios' ? 'varias' : null));
+  useEffect(() => { if ((app.ruta.query || {}).abrir) history.replaceState(null, '', '#/admin/ventanas'); }, []); // eslint-disable-line
   const ahora = useReloj(30000);
   const { datos, cargando, recargar } = useCarga(() => DB.listarVentanas(), []);
   const eliminar = async (v) => {

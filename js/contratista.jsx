@@ -144,6 +144,8 @@ const BannerVentana = () => {
         <div className="flex flex-wrap items-center gap-2"><strong>{U.nombrePeriodo(app.periodo)}</strong><span className="md:hidden"><ChipVentana enBanner /></span></div>
         {v ? <p className="text-sm mt-0.5">Ventana {U.textoVentana(v)}.</p> : <p className="text-sm mt-0.5">No hay ventana configurada para este período. Puedes consultar y descargar; para corregir algo ya enviado, usa «Solicitar corrección».</p>}
         {aviso ? <div className="prosa text-sm mt-1" dangerouslySetInnerHTML={{ __html: aviso }} /> : null}
+        {/* Un administrador en su vista de contratista abre las ventanas desde aquí («Abrir varios meses»). */}
+        {e.estado !== 'abierta' && app.vista === 'contratista' && app.rolCuenta === 'admin' ? <div className="mt-2"><Boton tam="sm" icono="calendario" onClick={() => app.cambiarVista('', '#/admin/ventanas?abrir=varios')}>Abrir ventanas (administrador)</Boton></div> : null}
       </div>
     </div>
   );
