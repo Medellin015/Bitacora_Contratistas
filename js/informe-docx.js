@@ -279,18 +279,29 @@
         B.celda(contenido, { width: k1 }),
       ],
     });
-    const firmaImg = (() => {
-      if (!imagenes.firma) return [new Paragraph({ keepNext: true, children: [] })];
-      // Mantiene la proporción dentro del recuadro máximo del modelo.
+    // Imagen de una firma, con la proporción conservada dentro del recuadro máximo del modelo.
+    const parrafoFirma = (data, tipo, anchoPx, altoPx) => {
       const { anchoMaxEmu, altoMaxEmu } = F.firma;
-      const ratio = imagenes.firmaAncho && imagenes.firmaAlto ? imagenes.firmaAncho / imagenes.firmaAlto : anchoMaxEmu / altoMaxEmu;
+      const ratio = anchoPx && altoPx ? anchoPx / altoPx : anchoMaxEmu / altoMaxEmu;
       let w = anchoMaxEmu, h = w / ratio;
       if (h > altoMaxEmu) { h = altoMaxEmu; w = h * ratio; }
-      return [new Paragraph({ keepNext: true, children: [new ImageRun({
-        type: imagenes.tipoFirma || 'png', data: imagenes.firma,
+      return new Paragraph({ keepNext: true, children: [new ImageRun({
+        type: tipo || 'png', data,
         transformation: { width: pxDeEmu(w), height: pxDeEmu(h) },
-      })] })];
+      })] });
+    };
+    // Debajo de una firma en línea: quién y cuándo firmó (letra pequeña).
+    const notaFirma = (texto) => new Paragraph({ keepNext: true, children: [B.run(texto, { size: 16 })] });
+    const firmaImg = (() => {
+      const p = [];
+      if (imagenes.firma) p.push(parrafoFirma(imagenes.firma, imagenes.tipoFirma, imagenes.firmaAncho, imagenes.firmaAlto));
+      if (d.firmaContratistaTexto) p.push(notaFirma(d.firmaContratistaTexto));
+      return p.length ? p : [new Paragraph({ keepNext: true, children: [] })];
     })();
+    // Vo.Bo.: la firma en línea del validador con su nota; si no, el texto de aprobación (si lo hay).
+    const voBo = imagenes.firmaValidador
+      ? [parrafoFirma(imagenes.firmaValidador, 'png', imagenes.firmaValidadorAncho, imagenes.firmaValidadorAlto), notaFirma(d.voBoFirmaTexto || d.voBoTexto || '')]
+      : [new Paragraph({ children: d.voBoTexto ? [B.run(d.voBoTexto)] : [] })];
     const tablaFirmas = new Table({
       width: { size: T2.ancho, type: WidthType.DXA },
       columnWidths: T2.columnas,
@@ -314,7 +325,7 @@
               etiqueta('Vo.Bo. VALIDADOR', { alignment: AlignmentType.JUSTIFIED }),
               new Paragraph({ children: [B.run('', { size: F.tamEtiqueta })] }),
             ], { width: k0 }),
-            B.celda([new Paragraph({ children: d.voBoTexto ? [B.run(d.voBoTexto)] : [] })], { width: k1 }),
+            B.celda(voBo, { width: k1 }),
           ],
         }),
       ],
@@ -364,9 +375,11 @@
    *   periodo:{desde,hasta}, contratista:{nombreCompleto, rol},
    *   contrato:{numero, objeto, componente, equipo, supervisor, validador},
    *   actividades:[{numero, obligacion, porcentaje, descripcion}],
-   *   dificultades, observaciones, anexos:[{nombre, ruta, url}], voBoTexto? }
+   *   dificultades, observaciones, anexos:[{nombre, ruta, url}], voBoTexto?,
+   *   firmaContratistaTexto?, voBoFirmaTexto? (notas de las firmas en línea) }
    * @param {object} imagenes { encabezado, pie, firma: Uint8Array|ArrayBuffer,
-   *   firmaAncho, firmaAlto (px reales de la firma, para conservar proporción) }
+   *   firmaAncho, firmaAlto (px reales de la firma, para conservar proporción),
+   *   firmaValidador?, firmaValidadorAncho?, firmaValidadorAlto? (Vo.Bo. firmado en línea) }
    * @param {object} D  Librería docx (window.docx o require('docx'))
    * @param {object} formato  Sobrescrituras opcionales de FORMATO_DEFAULT
    */

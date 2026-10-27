@@ -443,6 +443,10 @@ html[data-tema="oscuro"] .tarjeta, html[data-tema="oscuro"] .indicador, html[dat
 .banner-demo { background: var(--acento-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--acento) 45%, transparent); font-size: 0.8rem; font-weight: 500; padding: 0.35rem 0.75rem; text-align: center; }
 .banner-vista { background: var(--primario-suave); color: var(--texto); border-bottom: 1px solid color-mix(in srgb, var(--primario) 35%, transparent); font-size: 0.8rem; font-weight: 500; padding: 0.35rem 0.75rem; text-align: center; }
 .firma-vista { max-width: 240px; max-height: 80px; object-fit: contain; background: #fff; border: 1px solid var(--borde); border-radius: var(--radio); padding: 4px; }
+/* Recuadro para firmar: siempre blanco y con tinta oscura, como el papel (también en modo oscuro). */
+.pad-firma-marco { position: relative; }
+.pad-firma-lienzo { display: block; width: 100%; height: 180px; background: #fff; border: 1px solid var(--borde-fuerte); border-radius: var(--radio); touch-action: none; cursor: crosshair; }
+.pad-firma-linea { position: absolute; left: 8%; right: 8%; top: 130px; border-top: 1px dashed #b8bfc8; pointer-events: none; }
 .editor-json { font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.8rem; line-height: 1.45; min-height: 420px; white-space: pre; tab-size: 2; }
 .zona-soltar { border: 2px dashed var(--borde-fuerte); border-radius: var(--radio-g); padding: 1.25rem; text-align: center; color: var(--texto-2); background: var(--superficie-2); }
 .zona-soltar.activa { border-color: var(--primario); background: var(--primario-suave); }

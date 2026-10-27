@@ -51,6 +51,7 @@ const DetalleRevision = ({ envio, onCambio }) => {
   const formulario = app.formularios.find((f) => f.id === envio.formularioId);
   const contrato = app.contratos.find((c) => c.id === envio.contratoId);
   const [modal, setModal] = useState(null); // 'devolver' | 'reabrir' | 'diferencias'
+  const [firmando, setFirmando] = useState(null);   // { titulo, mensaje, textoOk, resolver }: firma del Vo.Bo.
   const [diferencias, setDiferencias] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [pestana, setPestana] = useState('respuestas');
@@ -71,10 +72,12 @@ const DetalleRevision = ({ envio, onCambio }) => {
     Object.keys(dif).forEach((k) => { if (ignorar.has(k.split('.')[0])) delete dif[k]; });
     return dif;
   };
-  const transicion = async (parcial, entrada, evento) => {
+  // despues(): lo que va con la transición ya guardada (p. ej. la firma del Vo.Bo.), antes de avisar.
+  const transicion = async (parcial, entrada, evento, despues) => {
     setOcupado(true);
     try {
       await DB.actualizarEnvio(envio.id, { ...parcial, historial: [...(envio.historial || []), { por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha: new Date(), observacion: '', ...entrada, estado: parcial.estado }] });
+      if (despues) await despues();
       if (evento) await Flujos.notificar({ evento, coleccion: 'envios', docId: envio.id, por: app.usuario.id });
       app.avisar('exito', `Envío ${U.ESTADOS[parcial.estado].etiqueta.toLowerCase()}`);
       onCambio();
@@ -89,10 +92,20 @@ const DetalleRevision = ({ envio, onCambio }) => {
     } catch (e) { app.avisar('error', `No se pudo verificar la descarga: ${e.message}`); setOcupado(false); return; }
     const final = esFinal;
     const texto = final ? `¿Aprobar definitivamente ${formulario.nombre} de ${U.nombrePeriodo(envio.periodo)}? Quedará de solo lectura.` : '¿Aprobar y pasar al coordinador?';
-    if (!(await app.confirmar({ titulo: 'Aprobar envío', mensaje: texto, textoOk: 'Aprobar' }))) { setOcupado(false); return; }
+    // La aprobación final del informe firma en línea el Vo.Bo. del validador.
+    let firma = null;
+    if (final && admiteFirmaEnLinea(formulario)) {
+      firma = await new Promise((resolver) => setFirmando({ titulo: 'Firmar Vo.Bo. y aprobar', mensaje: `${texto} Tu firma va en «Vo.Bo. VALIDADOR» del Word.`, textoOk: 'Firmar y aprobar', resolver }));
+      if (!firma) { setOcupado(false); return; }
+    } else if (!(await app.confirmar({ titulo: 'Aprobar envío', mensaje: texto, textoOk: 'Aprobar' }))) { setOcupado(false); return; }
     const parcial = final ? { estado: 'aprobado', pasoActual: 'ninguno' } : { estado: 'aprobado_revisor', pasoActual: 'coordinador' };
     if (final && app.parametros.voBoDigitalEnWord) parcial['datosDescarga.voBoTexto'] = `Aprobado en la plataforma por ${app.usuario.nombreCompleto} el ${U.fechaCorta(new Date())}`;
-    await transicion(parcial, {}, final ? 'aprobacion' : null);
+    // La firma va aparte (envios/{id}/firmas/validador): si no se guarda, la aprobación vale igual.
+    const firmarVoBo = firma ? async () => {
+      try { await DB.firmarEnvio(envio.id, 'validador', { ...firma, uid: app.usuario.id, nombre: app.usuario.nombreCompleto, rol: app.rol }); }
+      catch (e) { console.error(e); app.avisar('alerta', `Se aprobó, pero la firma del Vo.Bo. no se guardó (${motivoFirma(e)}).`); }
+    } : null;
+    await transicion(parcial, {}, final ? 'aprobacion' : null, firmarVoBo);
   };
   const devolver = async ({ observacion, fechaLimite }) => {
     setOcupado(true);
@@ -141,6 +154,7 @@ const DetalleRevision = ({ envio, onCambio }) => {
           {pestana === 'anexos' ? ((envio.anexos || []).length ? <ul className="grid gap-1 text-sm">{envio.anexos.map((a, i) => <li key={i} className="flex items-center gap-2"><Icono nombre="archivo" className="texto-3" />{a.url ? <a href={a.url} target="_blank" rel="noopener noreferrer">{a.nombre}</a> : a.nombre}<span className="mono text-xs texto-3">{U.tamanoLegible(a.tamano)}</span></li>)}</ul> : <Vacio icono="archivo" titulo="Sin archivos adjuntos" />) : null}
         </div>
       </div>
+      {firmando ? <ModalFirmar titulo={firmando.titulo} mensaje={firmando.mensaje} textoOk={firmando.textoOk} onListo={(f) => { const { resolver } = firmando; setFirmando(null); resolver(f); }} /> : null}
       {modal === 'devolver' ? <ModalDevolver titulo="Devolver para corrección" onCerrar={() => setModal(null)} onConfirmar={devolver} /> : null}
       {modal === 'reabrir' ? <ModalDevolver titulo="Reabrir envío aprobado" textoOk="Reabrir" onCerrar={() => setModal(null)} onConfirmar={devolver} /> : null}
       {modal === 'diferencias' ? (
