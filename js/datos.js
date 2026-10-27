@@ -1459,7 +1459,13 @@
       const [contratista, validador] = await Promise.all([leer('contratista'), leer('validador')]);
       return { contratista: contratista || null, validador: validador || null };
     };
-    DB.firmarEnvio = (envioId, quien, { pngBase64, ancho, alto, uid, nombre, rol }) => A.subSet('envios', envioId, 'firmas', quien, {
+    // Igual, pero un error de lectura se propaga: para saber si de verdad falta una firma o si no se
+    // pudo leer (p. ej. reglas sin publicar), y no pedirla cuando ya existe.
+    DB.leerFirmasEnvio = async (envioId) => {
+      const [contratista, validador] = await Promise.all(['contratista', 'validador'].map((quien) => A.subGet('envios', envioId, 'firmas', quien)));
+      return { contratista: contratista || null, validador: validador || null };
+    };
+    DB.firmarEnvio =(envioId, quien, { pngBase64, ancho, alto, uid, nombre, rol }) => A.subSet('envios', envioId, 'firmas', quien, {
       quien, pngBase64, ancho: Number(ancho) || 0, alto: Number(alto) || 0, uid, nombre: nombre || '', rol: rol || '', firmadoEn: ahora(),
     });
     DB.ultimoEnvio = async ({ rol, uid, contratoId, formularioId }) => {

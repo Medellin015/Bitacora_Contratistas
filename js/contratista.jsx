@@ -99,6 +99,24 @@ const firmaVigente = (firma, envio, estados) => {
 };
 // Por qué no se guardó una firma en línea: sin permiso, lo más probable es que falte publicar las reglas.
 const motivoFirma = (e) => (e && e.code === 'permission-denied' ? 'el servidor no la aceptó; si la app se acaba de actualizar, el administrador debe publicar las reglas de Firestore' : DB.traducirError(e));
+// Solo el contratista firma su envío: al enviarlo o, si otra persona lo envió en su nombre, después,
+// mientras se revisa (firestore.rules → firmaEnLinea). Sin su firma, el informe no va al validador.
+const ESTADOS_FIRMA_CONTRATISTA = ['enviado', 'reenviado', 'en_revision', 'aprobado_revisor'];
+const puedeFirmarContratista = (app, envio) => !!envio && envio.contratistaUid === app.usuario.id && ESTADOS_FIRMA_CONTRATISTA.includes(envio.estado);
+// 'firmado', 'pendiente' o 'desconocido' (no se pudo leer, p. ej. con las reglas sin publicar).
+const estadoFirmaContratista = async (envio) => {
+  try { const f = await DB.leerFirmasEnvio(envio.id); return firmaVigente(f.contratista, envio, ['enviado', 'reenviado']) ? 'firmado' : 'pendiente'; }
+  catch (e) { return 'desconocido'; }
+};
+// Guarda la firma del contratista en el envío. Si no se puede, avisa (aviso(motivo)) y la devuelve
+// igual: el Word que sale en ese momento (el del correo al validador) la lleva.
+const firmarComoContratista = async (app, envioId, firma, aviso) => {
+  const datos = { pngBase64: firma.pngBase64, ancho: firma.ancho, alto: firma.alto, uid: app.usuario.id, nombre: app.usuario.nombreCompleto, rol: app.rol };
+  let guardada = true;
+  try { await DB.firmarEnvio(envioId, 'contratista', datos); }
+  catch (e) { console.error(e); guardada = false; app.avisar('alerta', aviso(motivoFirma(e))); }
+  return { firma: { quien: 'contratista', ...datos, firmadoEn: new Date() }, guardada };
+};
 // Imagen (PNG, JPG o WebP) → { pngBase64, ancho, alto } que cabe en 150 KB (se reduce en canvas).
 const firmaDeImagen = async (archivo) => {
   const invalida = (mensaje) => { const e = new Error(mensaje); e.code = 'firma-invalida'; return e; };
@@ -172,9 +190,17 @@ const ModalFirmar = ({ titulo, mensaje, textoOk, onListo }) => {
     </Modal>
   );
 };
+// [modal, pedir]: pedir({ titulo, mensaje, textoOk }) abre ModalFirmar y entrega la firma (o null).
+const usePedirFirma = () => {
+  const [pedido, setPedido] = useState(null);
+  const pedir = useCallback((opciones) => new Promise((resolver) => setPedido({ ...opciones, resolver })), []);
+  const modal = pedido ? <ModalFirmar titulo={pedido.titulo} mensaje={pedido.mensaje} textoOk={pedido.textoOk} onListo={(f) => { setPedido(null); pedido.resolver(f); }} /> : null;
+  return [modal, pedir];
+};
 
 // Lo que necesita el Word de un envío ya hecho (descarga, vista previa y correo al validador).
-const contextoWord = async (app, envio, formulario) => {
+// firmaContratista: la firma recién hecha, por si no se pudo guardar (el correo sale firmado igual).
+const contextoWord = async (app, envio, formulario, { firmaContratista = null } = {}) => {
   const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId);
   const usuario = envio.contratistaUid === app.usuario.id ? app.usuario : (await DB.obtenerPerfil(envio.contratistaUid)) || { nombreCompleto: '', nombreCorto: '' };
   const [perfil, firmas] = await Promise.all([
@@ -183,7 +209,7 @@ const contextoWord = async (app, envio, formulario) => {
   ]);
   // La firma en línea del envío manda; sin ella (envíos de antes), la del perfil, como siempre. El
   // Vo.Bo. del validador solo sale mientras el envío esté aprobado (si se reabre, deja de valer).
-  const contratista = firmaVigente(firmas.contratista, envio, ['enviado', 'reenviado']);
+  const contratista = firmaVigente(firmas.contratista, envio, ['enviado', 'reenviado']) || firmaContratista;
   const validador = envio.estado === 'aprobado' ? firmaVigente(firmas.validador, envio, ['aprobado']) : null;
   return { envio, formulario, contrato, usuario, parametros: app.parametros, firma: contratista || perfil, firmas: { contratista, validador } };
 };
@@ -191,7 +217,7 @@ const contextoWord = async (app, envio, formulario) => {
 // «enviarInforme»; el flujo toma el correo del contrato). Avisa cómo le fue; true si salió.
 const correoValidadorDe = (contrato) => String((((contrato || {}).info || {}).supervision || {}).correoValidador || '').trim();
 const puedeEnviarAlValidador = (app, formulario) => admiteFirmaEnLinea(formulario) && (MODO_DEMO || Flujos.disponible('enviarInforme'));
-const enviarAlValidador = async (app, envio, formulario) => {
+const enviarAlValidador = async (app, envio, formulario, { firmaContratista = null } = {}) => {
   const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId).catch(() => null);
   const correo = correoValidadorDe(contrato);
   if (!puedeEnviarAlValidador(app, formulario)) {
@@ -200,7 +226,7 @@ const enviarAlValidador = async (app, envio, formulario) => {
   }
   if (!correo) { app.avisar('alerta', 'No se envió al correo del validador: el contrato no tiene su correo (Información del contrato → Supervisión y validación).'); return false; }
   try {
-    const { blob, nombre } = await Descargas.generarDocx(await contextoWord(app, envio, formulario));
+    const { blob, nombre } = await Descargas.generarDocx(await contextoWord(app, envio, formulario, { firmaContratista }));
     const r = await Flujos.enviarInforme({ envioId: envio.id, nombre, blob });
     app.avisar('exito', `Informe enviado al correo del validador (${(r && r.para) || correo})${r && r.simulado ? ' · demostración' : ''}`);
     return true;
@@ -209,6 +235,27 @@ const enviarAlValidador = async (app, envio, formulario) => {
     app.avisar('alerta', `No se pudo enviar al correo del validador: ${e.message}`);
     return false;
   }
+};
+// Desde la página del informe: antes de ir al validador, el contratista lo firma. Si falta su firma
+// (o no se pudo leer y aún puede firmar), se la pide; nadie más firma. Sin el flujo o el correo
+// del validador, solo firma. true si quedó firmado o salió el correo.
+const firmarYEnviarAlValidador = async (app, envio, formulario, pedirFirma) => {
+  const conCorreo = puedeEnviarAlValidador(app, formulario);
+  const estado = await estadoFirmaContratista(envio);
+  const puedeFirmar = puedeFirmarContratista(app, envio);
+  let firmaContratista = null;
+  if (estado === 'pendiente' || (estado === 'desconocido' && puedeFirmar)) {
+    if (!puedeFirmar) { app.avisar('alerta', 'Falta la firma del contratista: el informe le llega al validador cuando lo firme desde su cuenta.'); return false; }
+    const cual = `el informe No. ${envio.consecutivo} de ${U.nombrePeriodo(envio.periodo)}`;
+    const firma = await pedirFirma(conCorreo
+      ? { titulo: 'Firmar y enviar al validador', mensaje: `Firma ${cual}: así le llega firmado al validador.`, textoOk: 'Firmar y enviar' }
+      : { titulo: 'Firmar el informe', mensaje: `Firma ${cual}: tu firma queda en el Word.`, textoOk: 'Firmar' });
+    if (!firma) return false;
+    const r = await firmarComoContratista(app, envio.id, firma, (motivo) => `La firma en línea no se guardó (${motivo}).`);
+    if (!conCorreo) { if (r.guardada) app.avisar('exito', 'Informe firmado'); return r.guardada; }
+    firmaContratista = r.firma;
+  }
+  return conCorreo ? enviarAlValidador(app, envio, formulario, { firmaContratista }) : false;
 };
 
 // Botones de descarga / vista previa reutilizados en varias pantallas.
@@ -286,12 +333,19 @@ const PaginaInicioContratista = () => {
     for (const f of app.formularios.filter((x) => x.activo && x.tipo !== 'INFO_CONTRATO')) {
       try { const b = await DB.obtenerBorrador(DB.idBorrador(app.usuario.id, contrato.id, f.id, app.periodo)); if (b) borradores[f.id] = b; } catch (e) { /* sin borrador */ }
     }
-    return { envios, solicitudes, borradores };
+    // Informes del período que esperan la firma del contratista (otra persona los envió en su nombre).
+    const sinFirma = {};
+    for (const f of app.formularios.filter((x) => x.activo && admiteFirmaEnLinea(x))) {
+      const e = envios.find((x) => x.periodo === app.periodo && x.formularioId === f.id);
+      if (e && puedeFirmarContratista(app, e) && (await estadoFirmaContratista(e)) === 'pendiente') sinFirma[f.id] = e.id;
+    }
+    return { envios, solicitudes, borradores, sinFirma };
   }, [contrato && contrato.id, app.periodo, app.usuario.id]);
   if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
   const envios = (datos && datos.envios) || [];
   const solicitudes = (datos && datos.solicitudes) || [];
   const borradores = (datos && datos.borradores) || {};
+  const sinFirma = (datos && datos.sinFirma) || {};
   const delPeriodo = envios.filter((e) => e.periodo === app.periodo);
   const correcciones = envios.filter((e) => correccionVigente(e, ahora));
   const completitud = completitudInfo(fInfo, contrato);
@@ -308,13 +362,16 @@ const PaginaInicioContratista = () => {
       const abierta = !requiereVentana(f) || U.estadoVentana(app.ventana, f.id, ahora).estado === 'abierta';
       const limite = limiteDe(f);
       const puedeMas = limite == null || env.length < limite;
+      const faltaFirma = !!ultimo && sinFirma[f.id] === ultimo.id;
       let detalle, accion, estado = 'pendiente';
-      if (ultimo) { detalle = <span className="flex items-center gap-2 flex-wrap"><ChipEstado estado={ultimo.estado} /><span className="mono text-xs">No. {ultimo.consecutivo}</span>{correccionVigente(ultimo, ahora) ? <span className="text-xs" style={{ color: 'var(--alerta)' }}>plazo {U.fechaHora(ultimo.fechaLimiteCorreccion)}</span> : null}</span>; estado = ultimo.estado === 'aprobado' ? 'exito' : (ultimo.enCorreccion ? 'alerta' : 'primario'); }
+      if (ultimo) { detalle = <span className="flex items-center gap-2 flex-wrap"><ChipEstado estado={ultimo.estado} /><span className="mono text-xs">No. {ultimo.consecutivo}</span>{correccionVigente(ultimo, ahora) ? <span className="text-xs" style={{ color: 'var(--alerta)' }}>plazo {U.fechaHora(ultimo.fechaLimiteCorreccion)}</span> : null}{faltaFirma ? <Chip tipo="alerta" icono="firma">falta tu firma</Chip> : null}</span>; estado = ultimo.estado === 'aprobado' ? 'exito' : (ultimo.enCorreccion || faltaFirma ? 'alerta' : 'primario'); }
       else if (borradores[f.id]) { detalle = `Borrador guardado ${U.tiempoRelativo(borradores[f.id].actualizadoEn)}`; estado = 'alerta'; }
       else detalle = abierta ? 'Pendiente de diligenciar' : 'Fuera de ventana';
       // El informe y la cuenta de cobro se diligencian y se corrigen en su página del menú.
       const proceso = navDe(app.rol).find((n) => n.proceso === f.tipo);
-      if (ultimo && correccionVigente(ultimo, ahora)) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(proceso ? proceso.ruta : `#/formulario/${f.id}?modo=correccion&envio=${encodeURIComponent(ultimo.id)}`)}>Corregir</Boton>;
+      // Sin la firma del contratista el informe no va al validador: «Firmar» lleva a su página y la pide.
+      if (faltaFirma && proceso) accion = <Boton tam="sm" variante="acento" icono="firma" onClick={() => app.navegar(`${proceso.ruta}?firmar=1`)}>Firmar</Boton>;
+      else if (ultimo && correccionVigente(ultimo, ahora)) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(proceso ? proceso.ruta : `#/formulario/${f.id}?modo=correccion&envio=${encodeURIComponent(ultimo.id)}`)}>Corregir</Boton>;
       else if (ultimo && !puedeMas) accion = <AccionesEnvio envio={ultimo} compacto />;
       else if (abierta) accion = <Boton tam="sm" variante="primario" icono={borradores[f.id] ? 'editar' : 'mas'} onClick={() => app.navegar(proceso && !ultimo ? proceso.ruta : `#/formulario/${f.id}?modo=nuevo`)}>{borradores[f.id] ? 'Continuar' : 'Diligenciar'}</Boton>;
       else accion = <Boton tam="sm" disabled icono="candado">Ventana cerrada</Boton>;
@@ -576,10 +633,29 @@ const PaginaProceso = ({ tipo }) => {
   const [detalle, setDetalle] = useState(null);
   const [solicitar, setSolicitar] = useState(null);
   const [enviandoCorreo, setEnviandoCorreo] = useState(false);
+  const [modalFirma, pedirFirma] = usePedirFirma();
   const { datos, cargando, error, recargar } = useCarga(async () => {
     if (!contrato || !formulario || !habilitado) return null;
-    return { contratoId: contrato.id, formularioId: formulario.id, envios: await DB.listarEnvios({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id }) };
+    const envios = await DB.listarEnvios({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id });
+    // ¿El último del período ya tiene la firma del contratista? (si otra persona lo envió, falta).
+    const ultimoP = admiteFirmaEnLinea(formulario) ? envios.find((e) => e.periodo === app.periodo) : null;
+    const firma = ultimoP ? { envioId: ultimoP.id, estado: await estadoFirmaContratista(ultimoP) } : null;
+    return { contratoId: contrato.id, formularioId: formulario.id, envios, firma };
   }, [contrato && contrato.id, formulario && formulario.id, app.periodo, app.usuario.id, habilitado]);
+  const firmarYEnviar = async (envio) => {
+    setEnviandoCorreo(true);
+    try { if (await firmarYEnviarAlValidador(app, envio, formulario, pedirFirma)) recargar(true); }
+    finally { setEnviandoCorreo(false); }
+  };
+  // Desde Inicio («Firmar»): al llegar, se pide la firma del informe del período si le falta.
+  const firmarAlEntrar = useRef(!!(app.ruta.query || {}).firmar);
+  useEffect(() => {
+    if (!firmarAlEntrar.current || !datos) return;
+    firmarAlEntrar.current = false;
+    history.replaceState(null, '', app.ruta.hash);
+    const e = (datos.envios || []).find((x) => x.periodo === app.periodo);
+    if (e && datos.firma && datos.firma.envioId === e.id && datos.firma.estado === 'pendiente' && puedeFirmarContratista(app, e)) firmarYEnviar(e);
+  }, [datos]); // eslint-disable-line
   if (!habilitado) return <Vacio icono="candado" titulo={`${p.titulo}: deshabilitada por ahora`} texto="Cuando el administrador la habilite, podrás diligenciarla desde aquí." accion={<Boton onClick={() => app.navegar('#/inicio')}>Ir al inicio</Boton>} />;
   if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
   if (!formulario) return <Vacio icono={p.icono} titulo={p.titulo} texto="El administrador aún no ha publicado este formulario." />;
@@ -616,16 +692,28 @@ const PaginaProceso = ({ tipo }) => {
   };
   let delMes;
   if (ultimo) {
+    // Firma del contratista en el último envío (solo el informe la lleva): sin ella no va al validador.
+    const estadoFirma = vigentes.firma && vigentes.firma.envioId === ultimo.id ? vigentes.firma.estado : null;
+    const conCorreo = puedeEnviarAlValidador(app, formulario);
+    const faltaFirma = estadoFirma === 'pendiente' && puedeFirmarContratista(app, ultimo);
+    const pasoEnvio = [...(ultimo.historial || [])].reverse().find((h) => ['enviado', 'reenviado'].includes(h.estado));
+    const enSuNombre = !!pasoEnvio && pasoEnvio.por !== app.usuario.id;
     delMes = (
       <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <ChipEstado estado={ultimo.estado} /><span className="mono text-sm">No. {ultimo.consecutivo}</span><span className="text-sm texto-2">enviado {U.fechaHora(ultimo.enviadoEn)}</span>
           {correccionVigente(ultimo, ahora) ? <Chip tipo="alerta" icono="reloj">corregir hasta {U.fechaHora(ultimo.fechaLimiteCorreccion)}</Chip> : null}
+          {faltaFirma ? <Chip tipo="alerta" icono="firma">falta tu firma</Chip> : null}
         </div>
+        {faltaFirma ? (
+          <Alerta tipo="alerta"><strong>Falta tu firma.</strong> {enSuNombre ? `${pasoEnvio.porNombre || 'Otra persona'} lo envió en tu nombre. ` : ''}{conCorreo ? 'Cuando lo firmes, le llega al validador.' : 'Fírmalo para que el Word lleve tu firma en línea.'}</Alerta>
+        ) : null}
         <div className="flex flex-wrap gap-2">
+          {faltaFirma ? <Boton tam="sm" variante="primario" icono="firma" cargando={enviandoCorreo} onClick={() => firmarYEnviar(ultimo)}>{conCorreo ? 'Firmar y enviar al validador' : 'Firmar el informe'}</Boton> : null}
           {acciones(ultimo, false)}
-          {/* Por si el correo automático no salió o el validador lo necesita otra vez. */}
-          {puedeEnviarAlValidador(app, formulario) ? <Boton tam="sm" variante="fantasma" icono="correo" cargando={enviandoCorreo} onClick={async () => { setEnviandoCorreo(true); try { await enviarAlValidador(app, ultimo, formulario); } finally { setEnviandoCorreo(false); } }}>Enviar al validador</Boton> : null}
+          {/* Ya firmado: por si el correo automático no salió o el validador lo necesita otra vez. Si no se
+              pudo saber si está firmado, al pulsarlo se pide la firma (cuando aún se puede firmar). */}
+          {conCorreo && (estadoFirma === 'firmado' || estadoFirma === 'desconocido') ? <Boton tam="sm" variante="fantasma" icono="correo" cargando={enviandoCorreo} onClick={() => firmarYEnviar(ultimo)}>Enviar al validador</Boton> : null}
           {puedeMas && abierta && enContrato ? <Boton tam="sm" variante="primario" icono="mas" onClick={diligenciar}>Diligenciar otro</Boton> : null}
         </div>
       </div>
@@ -671,6 +759,7 @@ const PaginaProceso = ({ tipo }) => {
       </div>
       {detalle ? <DetalleEnvio envio={detalle} onCerrar={() => setDetalle(null)} /> : null}
       {solicitar ? <ModalNuevaSolicitud envioInicial={solicitar} onCerrar={() => setSolicitar(null)} onCreada={() => { setSolicitar(null); recargar(); app.recargarContadores(); }} /> : null}
+      {modalFirma}
     </div>
   );
 };
@@ -816,7 +905,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const formulario = app.formularios.find((f) => f.id === formularioId);
   const contratoBarra = app.contrato;
   const [previa, setPrevia] = useState(null);
-  const [firmando, setFirmando] = useState(null);   // { titulo, mensaje, textoOk, resolver }: modal de firma en línea
+  const [modalFirma, pedirFirma] = usePedirFirma();   // firma en línea del informe al enviarlo
   const [estadoGuardado, setEstadoGuardado] = useState({ fecha: null, guardando: false, error: null });
   // Decisión sobre el borrador ('continuar' | 'nuevo') de ESTOS datos: al cambiar de contrato o de
   // período se vuelve a preguntar por el borrador del contexto nuevo.
@@ -1023,33 +1112,31 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     // Corrección de un envío sin camposPlantilla: lo nuevo que quedó vacío no se guarda (sinNuevosVacios).
     const respuestas = correccion && !Array.isArray(envio.camposPlantilla) ? sinNuevosVacios(respuestasMotor, correccion.relajados) : respuestasMotor;
     const texto = esCorreccion ? '¿Reenviar el envío corregido? Volverá al revisor en el mismo paso.' : `¿Enviar ${formulario.nombre} de ${U.nombrePeriodo(periodo)}? ${limite != null ? 'Después de enviar solo podrás cambiarlo con una solicitud de corrección.' : ''}`;
-    // El informe se firma en línea al enviarlo (quien diligencia en nombre del contratista no firma por él).
+    // El informe se firma en línea al enviarlo (quien diligencia en nombre del contratista no firma en su lugar).
     let firma = null;
     if (admiteFirmaEnLinea(formulario) && !enNombreDeOtro) {
       const textoOk = esCorreccion ? 'Firmar y reenviar' : 'Firmar y enviar';
-      firma = await new Promise((resolver) => setFirmando({ titulo: textoOk, mensaje: texto, textoOk, resolver }));
+      firma = await pedirFirma({ titulo: textoOk, mensaje: texto, textoOk });
       if (!firma) return;
     } else if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
-    // El informe va al correo del validador después de mostrarse enviado (no hace esperar a nadie); si
-    // falla, el aviso lo dice y queda el botón «Enviar al validador».
-    const alValidador = (envioId) => {
+    // El informe va al correo del validador después de mostrarse enviado (no hace esperar a nadie) y
+    // solo firmado por el contratista: si otra persona lo envió en su nombre, sale cuando el contratista lo firme.
+    // Si falla, el aviso lo dice y queda el botón «Enviar al validador».
+    const alValidador = (envioId, firmaContratista) => {
       if (!admiteFirmaEnLinea(formulario)) return;
-      DB.obtenerEnvio(envioId).then((e) => (e ? enviarAlValidador(app, e, formulario) : null)).catch((err) => console.error(err));
+      if (!firmaContratista) { app.avisar('info', `Falta la firma del contratista: ${puedeEnviarAlValidador(app, formulario) ? 'le llega al validador cuando lo firme' : 'la hace'} desde su cuenta.`); return; }
+      DB.obtenerEnvio(envioId).then((e) => (e ? enviarAlValidador(app, e, formulario, { firmaContratista }) : null)).catch((err) => console.error(err));
     };
-    // La firma va aparte del envío (envios/{id}/firmas): si no se guarda, el envío vale igual y el Word
-    // usa la firma del perfil.
-    const firmarElEnvio = async (envioId) => {
-      if (!firma) return;
-      try { await DB.firmarEnvio(envioId, 'contratista', { ...firma, uid: app.usuario.id, nombre: app.usuario.nombreCompleto, rol: app.rol }); }
-      catch (e) { console.error(e); app.avisar('alerta', `Se envió, pero la firma en línea no se guardó (${motivoFirma(e)}). El Word usa la firma de tu perfil.`); }
-    };
+    // La firma va aparte del envío (envios/{id}/firmas): si no se guarda, el envío vale igual, las
+    // descargas usan la firma del perfil y el correo al validador, la recién hecha.
+    const firmarElEnvio = async (envioId) => (firma ? (await firmarComoContratista(app, envioId, firma, (motivo) => `Se envió, pero la firma en línea no se guardó (${motivo}). El Word usa la firma de tu perfil.`)).firma : null);
     try {
       const docs = await armarDocumentos(respuestas, '');
       const fecha = new Date();
       if (esCorreccion) {
         const entrada = { estado: 'reenviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: '' };
         await DB.actualizarEnvio(envio.id, { respuestas, ...docs, estado: 'reenviado', enCorreccion: false, historial: [...(envio.historial || []), entrada] });
-        await firmarElEnvio(envio.id);
+        const firmaHecha = await firmarElEnvio(envio.id);
         // Las solicitudes aprobadas que incluían este envío pasan a finalizada.
         try {
           const aprobadas = await DB.listarSolicitudes({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, estado: 'aprobada' });
@@ -1062,7 +1149,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         app.recargarContadores();
         hayCambios.current = false;
         trasEnviar();
-        alValidador(envio.id);
+        alValidador(envio.id, firmaHecha);
         return true;
       }
       const flujo = (formulario.config && formulario.config.flujoEstados) || [];
@@ -1077,14 +1164,14 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         historial: [{ estado: 'enviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: '' }],
       };
       const { id } = await DB.crearEnvio(envioNuevo, consecutivo);
-      await firmarElEnvio(id);
+      const firmaHecha = await firmarElEnvio(id);
       try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* nada */ }
       try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ }
       await Flujos.notificar({ evento: 'envio', coleccion: 'envios', docId: id, por: app.usuario.id });
       app.avisar('exito', `${formulario.nombre} enviado · No. ${consecutivo}`);
       app.recargarContadores();
       trasEnviar();
-      alValidador(id);
+      alValidador(id, firmaHecha);
       return true;
     } catch (e) {
       console.error(e);
@@ -1096,7 +1183,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     <div>
       {incrustado ? null : <Encabezado titulo={titulo} subtitulo={`${contrato.numero} · ${U.nombrePeriodo(periodo)}${rango ? ` · ${U.textoPeriodo(rango.desde, rango.hasta)}` : ''}${esCorreccion ? ` · plazo ${U.fechaHora(envio.fechaLimiteCorreccion)}` : ''}`} migas={[{ texto: 'Inicio', onClick: () => app.navegar('#/inicio') }, { texto: formulario.nombre }]} />}
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
-      {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.</Alerta> : null}
+      {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.{admiteFirmaEnLinea(formulario) ? ' La firma la hace el contratista después, desde su cuenta; sin ella no se envía al validador.' : ''}</Alerta> : null}
       {sigueBorrador && decisionBorrador === 'continuar' && borrador ? (
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <span className="text-sm texto-2">Sigues con lo que dejaste guardado.</span>
@@ -1114,7 +1201,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         onCambioRespuestas={(r, c, cambiado) => { respuestasActuales.current = r; capituloActual.current = c; hayCambios.current = cambiado; }}
         onCambioSubidas={(n) => { subiendo.current = n; }} />
       {previa ? <VistaPreviaDocx titulo={`Vista previa · ${formulario.nombre}`} generar={previa.generar} onCerrar={() => setPrevia(null)} /> : null}
-      {firmando ? <ModalFirmar titulo={firmando.titulo} mensaje={firmando.mensaje} textoOk={firmando.textoOk} onListo={(f) => { const { resolver } = firmando; setFirmando(null); resolver(f); }} /> : null}
+      {modalFirma}
     </div>
   );
 };

@@ -475,7 +475,9 @@ Cuando el contratista envía el **Informe de gestión** (o lo reenvía corregido
 la app arma el Word, con la firma en línea, y se lo pasa a este flujo, que lo
 manda por correo al **validador del contrato**. El destinatario sale del campo
 **Correo del validador** del contrato (Información del contrato → Supervisión y
-validación): la app nunca dice a quién enviarlo. El informe queda enviado
+validación): la app nunca dice a quién enviarlo. Solo sale firmado por el
+contratista: si otra persona lo envió en su nombre, la app no llama al flujo
+hasta que el contratista lo firme desde su cuenta. El informe queda enviado
 aunque el correo falle; la app avisa y en la página del informe queda el botón
 **Enviar al validador** para intentarlo de nuevo (sirve también si el validador
 lo necesita otra vez).
