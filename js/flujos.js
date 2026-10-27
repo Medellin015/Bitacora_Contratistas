@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================================
-   5) flujos.js — Power Automate (window.Flujos): subirArchivo · notificar · docxAPdf
+   5) flujos.js — Power Automate (window.Flujos): subirArchivo · notificar · enviarInforme · docxAPdf
    Convención: POST con Content-Type text/plain (UTF-8) y cuerpo JSON (sin preflight CORS).
    Las URL viven en parametros/app.flujos; si una está vacía la app avisa y no falla.
    El flujo lee Firestore con el idToken de la persona (Authorization: Bearer), así las
@@ -9,7 +9,8 @@
      1. Configuración y llamada genérica
      2. subirArchivo (un POST por archivo, máx. 15 MB)
      3. notificar (correos; cada intento queda en `notificaciones`)
-     4. docxAPdf (opcional)
+     4. enviarInforme (el informe en Word al correo del validador)
+     5. docxAPdf (opcional)
    ============================================================================ */
 (function (raiz) {
   const U = raiz.U;
@@ -102,7 +103,19 @@
     return { estado, error };
   };
 
-  /* ===== 4. docxAPdf ===== */
+  /* ===== 4. enviarInforme ===== */
+  // El Word del informe enviado al correo del validador del contrato. El flujo comprueba la sesión
+  // leyendo el envío y toma el correo del contrato, nunca de lo que mande la app.
+  // Envía { envioId, adjunto: { nombre, base64 } }; responde { ok: true, para }.
+  const enviarInforme = async ({ envioId, nombre, blob }) => {
+    if (blob.size > 10 * 1048576) { const e = new Error('El Word supera 10 MB; no se puede enviar por correo'); e.code = 'archivo-grande'; throw e; }
+    // Demostración sin flujo configurado: se simula (con uno configurado, se llama de verdad).
+    if (raiz.MODO_DEMO && !disponible('enviarInforme')) { await U.esperar(300); return { ok: true, simulado: true }; }
+    const base64 = U.base64DeArrayBuffer(await blob.arrayBuffer());
+    return llamar('enviarInforme', { envioId, adjunto: { nombre, base64 } }, { tiempoMs: 90000 });
+  };
+
+  /* ===== 5. docxAPdf ===== */
   const docxAPdf = async ({ nombre, blob }) => {
     if (blob.size > 10 * 1048576) { const e = new Error('El Word supera 10 MB; no se puede convertir a PDF'); e.code = 'archivo-grande'; throw e; }
     const base64 = U.base64DeArrayBuffer(await blob.arrayBuffer());
@@ -111,5 +124,5 @@
     return new Blob([U.uint8DeBase64(r.base64Pdf)], { type: 'application/pdf' });
   };
 
-  raiz.Flujos = { configurar, disponible, urlDe, llamar, subirArchivo, notificar, docxAPdf };
+  raiz.Flujos = { configurar, disponible, urlDe, llamar, subirArchivo, notificar, enviarInforme, docxAPdf };
 })(window);

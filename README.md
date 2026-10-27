@@ -29,7 +29,7 @@ los tokens de tema, componentes y animaciones.
 | `firebase.json` | Configuración para publicar reglas e índices con la CLI de Firebase. |
 | `py/leer_planilla.py` | Lector en Python de la planilla PILA en PDF (y de lo que reconoce el OCR en una escaneada). Corre en el navegador (Pyodide) y también en la terminal. |
 | `py/probar_leer_planilla.py` | Pruebas del lector con textos y OCR de planillas ficticias (`python3 py/probar_leer_planilla.py`). |
-| `docs/flujos.md` | Contrato y paso a paso de los flujos de Power Automate (`subirArchivo`, `notificar`, `docxAPdf`). |
+| `docs/flujos.md` | Contrato y paso a paso de los flujos de Power Automate (`subirArchivo`, `notificar`, `enviarInforme`, `docxAPdf`). |
 
 Los `.jsx` comparten el ámbito global (constantes de primer nivel), por eso el
 orden de carga importa y ningún nombre puede repetirse entre archivos. La
@@ -140,6 +140,27 @@ El informe de gestión se firma en la plataforma, sin imprimir:
 Requiere publicar `firestore.rules` (ver arriba). Mientras no estén publicadas,
 el envío y la aprobación funcionan igual, la app avisa que la firma en línea no
 se guardó y el Word usa la firma del perfil.
+
+### Informe al correo del validador
+
+Cada vez que el contratista envía el informe de gestión (o reenvía una
+corrección), la app le manda el Word, ya firmado, al **validador del
+contrato** por correo, con el flujo `enviarInforme` de Power Automate (ver
+[docs/flujos.md](docs/flujos.md#enviarinforme)).
+
+- El correo sale del campo **Correo del validador** del contrato
+  (*Información del contrato → Supervisión y validación*; en el Excel de
+  importación, la columna `correoValidador`). Lo llenan el administrador o el
+  equipo del contrato. La app nunca le dice al flujo a quién escribir: el
+  flujo lo lee del contrato.
+- El campo llega con la versión 2 de *Información del contrato*: el
+  administrador debe pulsar **Actualizar** en el aviso «Hay una versión
+  nueva…».
+- La URL del flujo va en **Parámetros → enviarInforme**.
+- El correo se manda después de mostrar el informe como enviado, sin hacer
+  esperar al contratista. Si falla (o falta el correo o el flujo), el informe
+  queda enviado igual, la app lo avisa y en la página del informe queda el
+  botón **Enviar al validador** para intentarlo de nuevo.
 
 ### Lector de planillas de seguridad social
 

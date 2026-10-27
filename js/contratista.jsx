@@ -173,6 +173,44 @@ const ModalFirmar = ({ titulo, mensaje, textoOk, onListo }) => {
   );
 };
 
+// Lo que necesita el Word de un envío ya hecho (descarga, vista previa y correo al validador).
+const contextoWord = async (app, envio, formulario) => {
+  const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId);
+  const usuario = envio.contratistaUid === app.usuario.id ? app.usuario : (await DB.obtenerPerfil(envio.contratistaUid)) || { nombreCompleto: '', nombreCorto: '' };
+  const [perfil, firmas] = await Promise.all([
+    DB.obtenerFirma(envio.contratistaUid).catch(() => null),
+    admiteFirmaEnLinea(formulario) ? DB.obtenerFirmasEnvio(envio.id) : { contratista: null, validador: null },
+  ]);
+  // La firma en línea del envío manda; sin ella (envíos de antes), la del perfil, como siempre. El
+  // Vo.Bo. del validador solo sale mientras el envío esté aprobado (si se reabre, deja de valer).
+  const contratista = firmaVigente(firmas.contratista, envio, ['enviado', 'reenviado']);
+  const validador = envio.estado === 'aprobado' ? firmaVigente(firmas.validador, envio, ['aprobado']) : null;
+  return { envio, formulario, contrato, usuario, parametros: app.parametros, firma: contratista || perfil, firmas: { contratista, validador } };
+};
+// El informe enviado, en Word y con sus firmas, al correo del validador del contrato (flujo
+// «enviarInforme»; el flujo toma el correo del contrato). Avisa cómo le fue; true si salió.
+const correoValidadorDe = (contrato) => String((((contrato || {}).info || {}).supervision || {}).correoValidador || '').trim();
+const puedeEnviarAlValidador = (app, formulario) => admiteFirmaEnLinea(formulario) && (MODO_DEMO || Flujos.disponible('enviarInforme'));
+const enviarAlValidador = async (app, envio, formulario) => {
+  const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId).catch(() => null);
+  const correo = correoValidadorDe(contrato);
+  if (!puedeEnviarAlValidador(app, formulario)) {
+    if (correo) app.avisar('alerta', 'No se envió al correo del validador: falta configurar el flujo «enviarInforme» en Parámetros (avísale al administrador).');
+    return false;
+  }
+  if (!correo) { app.avisar('alerta', 'No se envió al correo del validador: el contrato no tiene su correo (Información del contrato → Supervisión y validación).'); return false; }
+  try {
+    const { blob, nombre } = await Descargas.generarDocx(await contextoWord(app, envio, formulario));
+    const r = await Flujos.enviarInforme({ envioId: envio.id, nombre, blob });
+    app.avisar('exito', `Informe enviado al correo del validador (${(r && r.para) || correo})${r && r.simulado ? ' · demostración' : ''}`);
+    return true;
+  } catch (e) {
+    console.error(e);
+    app.avisar('alerta', `No se pudo enviar al correo del validador: ${e.message}`);
+    return false;
+  }
+};
+
 // Botones de descarga / vista previa reutilizados en varias pantallas.
 const AccionesEnvio = ({ envio, compacto }) => {
   const app = useApp();
@@ -180,20 +218,7 @@ const AccionesEnvio = ({ envio, compacto }) => {
   const [descargando, setDescargando] = useState(false);
   const formulario = app.formularios.find((f) => f.id === envio.formularioId);
   if (!formulario) return null;
-  const contexto = async () => {
-    const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId);
-    const usuario = envio.contratistaUid === app.usuario.id ? app.usuario : (await DB.obtenerPerfil(envio.contratistaUid)) || { nombreCompleto: '', nombreCorto: '' };
-    const [perfil, firmas] = await Promise.all([
-      DB.obtenerFirma(envio.contratistaUid).catch(() => null),
-      admiteFirmaEnLinea(formulario) ? DB.obtenerFirmasEnvio(envio.id) : { contratista: null, validador: null },
-    ]);
-    // La firma en línea del envío manda; sin ella (envíos de antes), la del perfil, como siempre. El
-    // Vo.Bo. del validador solo sale mientras el envío esté aprobado (si se reabre, deja de valer).
-    const contratista = firmaVigente(firmas.contratista, envio, ['enviado', 'reenviado']);
-    const validador = envio.estado === 'aprobado' ? firmaVigente(firmas.validador, envio, ['aprobado']) : null;
-    return { envio, formulario, contrato, usuario, parametros: app.parametros, firma: contratista || perfil, firmas: { contratista, validador } };
-  };
-  const generar = async () => Descargas.generarDocx(await contexto());
+  const generar = async () => Descargas.generarDocx(await contextoWord(app, envio, formulario));
   const descargar = async () => {
     setDescargando(true);
     try { const { blob, nombre } = await generar(); U.descargarBlob(blob, nombre); }
@@ -550,6 +575,7 @@ const PaginaProceso = ({ tipo }) => {
   const ahora = useReloj(60000);
   const [detalle, setDetalle] = useState(null);
   const [solicitar, setSolicitar] = useState(null);
+  const [enviandoCorreo, setEnviandoCorreo] = useState(false);
   const { datos, cargando, error, recargar } = useCarga(async () => {
     if (!contrato || !formulario || !habilitado) return null;
     return { contratoId: contrato.id, formularioId: formulario.id, envios: await DB.listarEnvios({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id }) };
@@ -596,7 +622,12 @@ const PaginaProceso = ({ tipo }) => {
           <ChipEstado estado={ultimo.estado} /><span className="mono text-sm">No. {ultimo.consecutivo}</span><span className="text-sm texto-2">enviado {U.fechaHora(ultimo.enviadoEn)}</span>
           {correccionVigente(ultimo, ahora) ? <Chip tipo="alerta" icono="reloj">corregir hasta {U.fechaHora(ultimo.fechaLimiteCorreccion)}</Chip> : null}
         </div>
-        <div className="flex flex-wrap gap-2">{acciones(ultimo, false)}{puedeMas && abierta && enContrato ? <Boton tam="sm" variante="primario" icono="mas" onClick={diligenciar}>Diligenciar otro</Boton> : null}</div>
+        <div className="flex flex-wrap gap-2">
+          {acciones(ultimo, false)}
+          {/* Por si el correo automático no salió o el validador lo necesita otra vez. */}
+          {puedeEnviarAlValidador(app, formulario) ? <Boton tam="sm" variante="fantasma" icono="correo" cargando={enviandoCorreo} onClick={async () => { setEnviandoCorreo(true); try { await enviarAlValidador(app, ultimo, formulario); } finally { setEnviandoCorreo(false); } }}>Enviar al validador</Boton> : null}
+          {puedeMas && abierta && enContrato ? <Boton tam="sm" variante="primario" icono="mas" onClick={diligenciar}>Diligenciar otro</Boton> : null}
+        </div>
       </div>
     );
   } else if (!enContrato) {
@@ -999,6 +1030,12 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       firma = await new Promise((resolver) => setFirmando({ titulo: textoOk, mensaje: texto, textoOk, resolver }));
       if (!firma) return;
     } else if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
+    // El informe va al correo del validador después de mostrarse enviado (no hace esperar a nadie); si
+    // falla, el aviso lo dice y queda el botón «Enviar al validador».
+    const alValidador = (envioId) => {
+      if (!admiteFirmaEnLinea(formulario)) return;
+      DB.obtenerEnvio(envioId).then((e) => (e ? enviarAlValidador(app, e, formulario) : null)).catch((err) => console.error(err));
+    };
     // La firma va aparte del envío (envios/{id}/firmas): si no se guarda, el envío vale igual y el Word
     // usa la firma del perfil.
     const firmarElEnvio = async (envioId) => {
@@ -1025,6 +1062,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         app.recargarContadores();
         hayCambios.current = false;
         trasEnviar();
+        alValidador(envio.id);
         return true;
       }
       const flujo = (formulario.config && formulario.config.flujoEstados) || [];
@@ -1046,6 +1084,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       app.avisar('exito', `${formulario.nombre} enviado · No. ${consecutivo}`);
       app.recargarContadores();
       trasEnviar();
+      alValidador(id);
       return true;
     } catch (e) {
       console.error(e);
