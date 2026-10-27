@@ -123,7 +123,10 @@ El informe de gestión se firma en la plataforma, sin imprimir:
   **Firmar y enviar**. Propone la firma guardada en **Mi perfil**; si no hay,
   se dibuja en pantalla con el dedo, un lápiz o el mouse, o se sube una imagen,
   y puede quedar guardada para la próxima vez. Quien diligencia en nombre del
-  contratista no firma por él.
+  contratista no firma en su lugar: el informe queda enviado y el contratista
+  lo firma después desde su cuenta (en **Inicio** sale «falta tu firma» con el
+  botón **Firmar**, que abre la firma en la página del informe; se puede
+  mientras esté en revisión, no aprobado ni en corrección).
 - **Validador**: la aprobación final («Aprobar», del coordinador o de quien
   tenga el último paso) pide **Firmar Vo.Bo. y aprobar**. Las aprobaciones
   intermedias no piden firma.
@@ -157,10 +160,15 @@ contrato** por correo, con el flujo `enviarInforme` de Power Automate (ver
   administrador debe pulsar **Actualizar** en el aviso «Hay una versión
   nueva…».
 - La URL del flujo va en **Parámetros → enviarInforme**.
+- Solo sale **firmado por el contratista**: al enviarlo, la app le pide la
+  firma antes de mandar nada. Si otra persona lo envió en su nombre, no va al
+  validador hasta que el contratista lo firme (botón **Firmar y enviar al
+  validador** en la página del informe, o **Firmar** en Inicio).
 - El correo se manda después de mostrar el informe como enviado, sin hacer
   esperar al contratista. Si falla (o falta el correo o el flujo), el informe
   queda enviado igual, la app lo avisa y en la página del informe queda el
-  botón **Enviar al validador** para intentarlo de nuevo.
+  botón **Enviar al validador** para intentarlo de nuevo (si el informe aún
+  no tiene la firma del contratista, la pide antes).
 
 ### Lector de planillas de seguridad social
 
