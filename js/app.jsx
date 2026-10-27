@@ -331,13 +331,14 @@ const App = () => {
     setContratoId(id); try { localStorage.setItem('bitacora.contrato', id); } catch (e) { /* nada */ }
   }, [pedirSalida]);
   const elegirPeriodo = useCallback(async (p) => { if (p !== periodoActual.current && (await pedirSalida('periodo'))) setPeriodo(p); }, [pedirSalida]);
-  // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio.
-  const cambiarVista = useCallback(async (vista) => {
+  // Vista de contratista ('contratista') o la del rol de la cuenta (''): recarga todo desde el inicio
+  // (o desde destino, p. ej. las ventanas del administrador).
+  const cambiarVista = useCallback(async (vista, destino = '#/') => {
     if (!(await pedirSalida('navegar'))) return;
     guardaSalida.current = null; vaciado.current = null;
     vistaRef.current = vista;
     try { if (vista) localStorage.setItem('bitacora.vista', vista); else localStorage.removeItem('bitacora.vista'); } catch (e) { /* nada */ }
-    window.location.hash = '#/';
+    window.location.hash = destino;
     cargarTodo();
   }, [cargarTodo, pedirSalida]);
   const cerrarSesion = useCallback(async () => {
