@@ -240,7 +240,7 @@ const PaginaAdminContratos = () => {
 };
 
 /* ===== 3. Importador Excel ===== */
-const COLUMNAS_IMPORT = ['cedula', 'correo', 'nombres', 'apellidos', 'telefono', 'numeroContrato', 'etiqueta', 'fechaInicio', 'fechaFin', 'valorTotal', 'valorMensual', 'objeto', 'componente', 'equipo', 'supervisor', 'validador', 'rolProceso', 'cdp', 'rp', 'plazoDias', 'correosRevisores', 'correosCoordinadores', 'obligaciones'];
+const COLUMNAS_IMPORT = ['cedula', 'correo', 'nombres', 'apellidos', 'telefono', 'numeroContrato', 'etiqueta', 'fechaInicio', 'fechaFin', 'valorTotal', 'valorMensual', 'objeto', 'componente', 'equipo', 'supervisor', 'validador', 'correoValidador', 'rolProceso', 'cdp', 'rp', 'plazoDias', 'correosRevisores', 'correosCoordinadores', 'obligaciones'];
 const aISOImport = (v) => {
   if (!v && v !== 0) return '';
   // SheetJS entrega las fechas a medianoche local; si vienen en UTC (otra zona) se usan los getters UTC.
@@ -264,7 +264,7 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
   const plantilla = () => {
     Descargas.exportarExcel({ nombreArchivo: 'Plantilla importacion contratistas.xlsx', hojas: [{ nombre: 'Contratos', columnas: COLUMNAS_IMPORT.map((c) => ({ titulo: c, clave: c, ancho: c === 'objeto' || c === 'obligaciones' ? 60 : 20 })), filas: [{
       cedula: '1000000000', correo: 'persona@ejemplo.com', nombres: 'Nombre', apellidos: 'Apellido Apellido', telefono: '3000000000', numeroContrato: 'P-00000 DE 2026', etiqueta: 'PRINCIPAL', fechaInicio: '2026-02-02', fechaFin: '2026-12-31', valorTotal: 45000000, valorMensual: 4500000,
-      objeto: 'Objeto del contrato…', componente: '1. COMPONENTE <PENDIENTE>', equipo: 'Equipo <PENDIENTE>', supervisor: 'Nombre del supervisor ITM', validador: 'Nombre del validador', rolProceso: 'Rol en el proceso', cdp: '', rp: '', plazoDias: 300,
+      objeto: 'Objeto del contrato…', componente: '1. COMPONENTE <PENDIENTE>', equipo: 'Equipo <PENDIENTE>', supervisor: 'Nombre del supervisor ITM', validador: 'Nombre del validador', correoValidador: 'validador@entidad.gov.co', rolProceso: 'Rol en el proceso', cdp: '', rp: '', plazoDias: 300,
       correosRevisores: 'revisor@entidad.gov.co', correosCoordinadores: 'coordinador@entidad.gov.co', obligaciones: 'Obligación 1 | Obligación 2 | Obligación 3',
     }] }] });
   };
@@ -278,13 +278,15 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
       if (!U.esCorreo(correo)) errores.push('correo inválido');
       if (!String(f.nombres || '').trim() || !String(f.apellidos || '').trim()) errores.push('nombres y apellidos obligatorios');
       if (!String(f.numeroContrato || '').trim()) errores.push('numeroContrato obligatorio');
+      const correoValidador = U.normalizarCorreo(f.correoValidador);
+      if (correoValidador && !U.esCorreo(correoValidador)) errores.push('correoValidador inválido');
       const fechaInicio = aISOImport(f.fechaInicio), fechaFin = aISOImport(f.fechaFin);
       if (fechaInicio && !U.esISO(fechaInicio)) errores.push('fechaInicio inválida');
       if (fechaFin && !U.esISO(fechaFin)) errores.push('fechaFin inválida');
       const resolver = (campo, rol) => String(f[campo] || '').split(/[;,]/).map(U.normalizarCorreo).filter(Boolean).map((c) => { const u = revisoresPorCorreo[c]; if (!u || u.rol !== rol) { errores.push(`${campo}: ${c} no es un usuario ${rol}`); return null; } return u.id; }).filter(Boolean);
       const revisores = resolver('correosRevisores', 'revisor'), coordinadores = resolver('correosCoordinadores', 'coordinador');
       const obligaciones = String(f.obligaciones || '').split(/\s*\|\s*|\r?\n/).map((t) => t.trim()).filter(Boolean).map((texto, k) => ({ numero: k + 1, texto }));
-      return { fila: i + 2, cedula, correo, nombres: String(f.nombres || '').trim(), apellidos: String(f.apellidos || '').trim(), telefono: String(f.telefono || '').trim(), numeroContrato: String(f.numeroContrato || '').trim(), id: U.slug(f.numeroContrato || ''), etiqueta: String(f.etiqueta || '').trim(), fechaInicio, fechaFin, valorTotal: U.parseNumero(f.valorTotal), valorMensual: U.parseNumero(f.valorMensual), objeto: String(f.objeto || '').trim(), componente: String(f.componente || '').trim(), equipo: String(f.equipo || '').trim(), supervisor: String(f.supervisor || '').trim(), validador: String(f.validador || '').trim(), rolProceso: String(f.rolProceso || '').trim(), cdp: String(f.cdp || '').trim(), rp: String(f.rp || '').trim(), plazoDias: U.parseNumero(f.plazoDias), revisores, coordinadores, obligaciones, errores };
+      return { fila: i + 2, cedula, correo, nombres: String(f.nombres || '').trim(), apellidos: String(f.apellidos || '').trim(), telefono: String(f.telefono || '').trim(), numeroContrato: String(f.numeroContrato || '').trim(), id: U.slug(f.numeroContrato || ''), etiqueta: String(f.etiqueta || '').trim(), fechaInicio, fechaFin, valorTotal: U.parseNumero(f.valorTotal), valorMensual: U.parseNumero(f.valorMensual), objeto: String(f.objeto || '').trim(), componente: String(f.componente || '').trim(), equipo: String(f.equipo || '').trim(), supervisor: String(f.supervisor || '').trim(), validador: String(f.validador || '').trim(), correoValidador, rolProceso: String(f.rolProceso || '').trim(), cdp: String(f.cdp || '').trim(), rp: String(f.rp || '').trim(), plazoDias: U.parseNumero(f.plazoDias), revisores, coordinadores, obligaciones, errores };
     });
   };
   const leer = async (archivo) => {
@@ -320,14 +322,14 @@ const ImportadorExcel = ({ usuarios, alTerminar }) => {
           const infoContrato = U.sinIndefinidos({ numero: f.numeroContrato, objeto: f.objeto, componente, equipo, fechaInicio: f.fechaInicio, fechaFin: f.fechaFin, plazoDias: f.plazoDias == null ? '' : f.plazoDias, valorTotal: f.valorTotal == null ? '' : f.valorTotal, valorMensual: f.valorMensual == null ? '' : f.valorMensual, cdp: f.cdp, rp: f.rp });
           const existente = await DB.obtenerContrato(f.id);
           if (existente) {
-            await DB.actualizarContrato(f.id, { numero: f.numeroContrato, etiqueta: f.etiqueta, ...(existente.contratistaUid ? {} : { correoContratista: f.correo }), 'info.contrato': { ...(existente.info && existente.info.contrato), ...infoContrato }, 'info.obligaciones': { lista: f.obligaciones.length ? f.obligaciones : ((existente.info && existente.info.obligaciones && existente.info.obligaciones.lista) || []) }, 'info.supervision': { supervisor: f.supervisor, validador: f.validador }, 'info.contratista.nombreCompleto': nombreCompleto, 'info.contratista.rolProceso': f.rolProceso, 'info.contratista.telefono': f.telefono }, { por: app.usuario.id, cambios: { importacion: { antes: null, despues: `Fila ${f.fila}` } } });
+            await DB.actualizarContrato(f.id, { numero: f.numeroContrato, etiqueta: f.etiqueta, ...(existente.contratistaUid ? {} : { correoContratista: f.correo }), 'info.contrato': { ...(existente.info && existente.info.contrato), ...infoContrato }, 'info.obligaciones': { lista: f.obligaciones.length ? f.obligaciones : ((existente.info && existente.info.obligaciones && existente.info.obligaciones.lista) || []) }, 'info.supervision': { supervisor: f.supervisor, validador: f.validador, correoValidador: f.correoValidador || (existente.info && existente.info.supervision && existente.info.supervision.correoValidador) || '' }, 'info.contratista.nombreCompleto': nombreCompleto, 'info.contratista.rolProceso': f.rolProceso, 'info.contratista.telefono': f.telefono }, { por: app.usuario.id, cambios: { importacion: { antes: null, despues: `Fila ${f.fila}` } } });
             if (!U.igualProfundo(f.revisores, existente.revisores || []) || !U.igualProfundo(f.coordinadores, existente.coordinadores || [])) await reasignar(existente, usuarios, f.revisores, f.coordinadores);
             res.contratosActualizados++;
           } else {
             await DB.crearContrato(f.id, {
               numero: f.numeroContrato, etiqueta: f.etiqueta, contratistaUid: null, cedulaContratista: f.cedula, correoContratista: f.correo,
               revisores: f.revisores, coordinadores: f.coordinadores, correosRevisores: correosDe(f.revisores), correosCoordinadores: correosDe(f.coordinadores), estado: 'activo', permitirActualizar: false,
-              info: { contratista: { nombreCompleto, cedula: f.cedula, telefono: f.telefono, rolProceso: f.rolProceso, rutaNas: String(app.parametros.rutaNasPlantilla || '').replace(/<CEDULA>/g, f.cedula) }, contrato: infoContrato, obligaciones: { lista: f.obligaciones }, supervision: { supervisor: f.supervisor, validador: f.validador }, modificaciones: { adiciones: [], ampliaciones: [], suspensiones: [], garantias: [], pagos: [] } },
+              info: { contratista: { nombreCompleto, cedula: f.cedula, telefono: f.telefono, rolProceso: f.rolProceso, rutaNas: String(app.parametros.rutaNasPlantilla || '').replace(/<CEDULA>/g, f.cedula) }, contrato: infoContrato, obligaciones: { lista: f.obligaciones }, supervision: { supervisor: f.supervisor, validador: f.validador, correoValidador: f.correoValidador }, modificaciones: { adiciones: [], ampliaciones: [], suspensiones: [], garantias: [], pagos: [] } },
             });
             res.contratosCreados++;
           }
@@ -830,6 +832,7 @@ const PaginaAdminParametros = () => {
         <SeccionParametros titulo="Flujos de Power Automate" ayuda="URL del disparador «Cuando se recibe una solicitud HTTP». Vacío = la función queda deshabilitada con aviso.">
           <Campo etiqueta="subirArchivo (OneDrive o SharePoint)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.subirArchivo) || ''} onChange={txt('flujos.subirArchivo')} placeholder="https://….environment.api.powerplatform.com/powerautomate/automations/direct/workflows/…" /></Campo>
           <Campo etiqueta="notificar (correos Outlook)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.notificar) || ''} onChange={txt('flujos.notificar')} /></Campo>
+          <Campo etiqueta="enviarInforme (el informe en Word al correo del validador)" className="md:col-span-2" ayuda="El correo sale del contrato: Información del contrato → Supervisión y validación → Correo del validador."><Entrada className="mono" value={(p.flujos && p.flujos.enviarInforme) || ''} onChange={txt('flujos.enviarInforme')} /></Campo>
           <Campo etiqueta="docxAPdf (opcional)" className="md:col-span-2"><Entrada className="mono" value={(p.flujos && p.flujos.docxAPdf) || ''} onChange={txt('flujos.docxAPdf')} /></Campo>
         </SeccionParametros>
         <SeccionParametros titulo="Correo" ayuda="Variables: {{nombre}} {{contrato}} {{formulario}} {{periodo}} {{fechaLimite}} {{enlace}} {{tipo}}. El flujo arma el HTML y los destinatarios.">

@@ -24,7 +24,8 @@
         "id": "info_contrato",
         "nombre": "Información del contrato",
         "tipo": "INFO_CONTRATO",
-        "version": 1,
+        "version": 2,
+        "novedad": "Correo del validador (en Supervisión y validación): le llega el informe de gestión en Word cada vez que el contratista lo envía o reenvía.",
         "activo": true,
         "plantillaDescarga": "generica",
         "config": {
@@ -235,6 +236,14 @@
                 "tipo": "TEXTO",
                 "obligatoria": true,
                 "soloRevisor": true
+              },
+              {
+                "id": "correoValidador",
+                "etiqueta": "Correo del validador",
+                "tipo": "CORREO",
+                "obligatoria": false,
+                "soloRevisor": true,
+                "ayuda": "Le llega el informe de gestión en Word cada vez que el contratista lo envía o reenvía (flujo «enviarInforme»)."
               }
             ]
           },
@@ -1030,7 +1039,7 @@
     // La cuenta de cobro del contratista está deshabilitada por ahora: se ve en el menú, en gris, y se
     // enciende en Parámetros → Procesos del contratista.
     cuentaCobroHabilitada: false,
-    flujos: { subirArchivo: '', notificar: '', docxAPdf: '' },
+    flujos: { subirArchivo: '', notificar: '', enviarInforme: '', docxAPdf: '' },
     correo: {
       remitente: '',
       plantillas: {
@@ -1530,7 +1539,7 @@
         contrato: { numero: 'P-00000 DE 2026', objeto: 'Prestación de servicios como contratista independiente, sin vínculo laboral por su propia cuenta y riesgo para realizar la gestión de Profesional de apoyo en ejecución del Contrato Interadministrativo No. 0000000000 de 2026.',
           componente: 'COMP-1', equipo: 'EQ-1', fechaFirma: U.sumarDias(inicioContrato, -3), fechaInicio: inicioContrato, fechaFin: `${pActual.slice(0, 4)}-12-31`, plazoDias: 300, valorTotal: 45000000, valorMensual: 4500000, cdp: '<PENDIENTE>', rp: '<PENDIENTE>' },
         obligaciones: { lista: obligaciones },
-        supervision: { supervisor: 'Nombre del Supervisor ITM', validador: 'Nombre del Validador' },
+        supervision: { supervisor: 'Nombre del Supervisor ITM', validador: 'Nombre del Validador', correoValidador: 'validador@demo.local' },
         modificaciones: { adiciones: [], ampliaciones: [], suspensiones: [], garantias: [], pagos: [] },
       },
     });
@@ -1541,7 +1550,7 @@
       info: { contratista: { nombreCompleto: 'Persona Nueva Demo', cedula: '1000000005' },
         contrato: { numero: 'P-00001 DE 2026', objeto: 'Prestación de servicios profesionales de apoyo técnico (demostración).', componente: 'COMP-2', equipo: 'EQ-2', fechaInicio: `${pActual}-10`, fechaFin: `${pActual.slice(0, 4)}-12-31`, valorTotal: 30000000, valorMensual: 3000000 },
         obligaciones: { lista: [{ numero: 1, texto: 'Apoyar técnicamente la supervisión de obras (demostración).' }] },
-        supervision: { supervisor: 'Nombre del Supervisor ITM', validador: 'Nombre del Validador' }, modificaciones: {} },
+        supervision: { supervisor: 'Nombre del Supervisor ITM', validador: 'Nombre del Validador', correoValidador: 'validador@demo.local' }, modificaciones: {} },
     });
     await DB.guardarPreRegistro('1000000004', { correo: 'contratista@demo.local', nombreCompleto: 'Nombre Apellido Apellido', contratos: ['P-00000-DE-2026'], revisores: ['demo-revisor'], coordinadores: ['demo-coordinador'], activado: true, uid: 'demo-contratista' });
     await DB.guardarPreRegistro('1000000005', { correo: 'nuevo@demo.local', nombreCompleto: 'Persona Nueva Demo', contratos: ['P-00001-DE-2026'], revisores: ['demo-revisor'], coordinadores: ['demo-coordinador'], activado: false, uid: null });

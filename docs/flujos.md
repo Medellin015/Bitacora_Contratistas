@@ -1,6 +1,6 @@
 # Flujos de Power Automate
 
-La app llama tres flujos. Sus URL se pegan en **Parámetros → Flujos de Power
+La app llama cuatro flujos. Sus URL se pegan en **Parámetros → Flujos de Power
 Automate** y quedan en `parametros/app.flujos`. Si una URL está vacía, la app
 avisa y sigue funcionando.
 
@@ -8,6 +8,7 @@ avisa y sigue funcionando.
 | --- | --- | --- |
 | `subirArchivo` | Guarda en OneDrive o SharePoint los archivos que se adjuntan en los formularios y devuelve el enlace. | Sí, para adjuntar archivos |
 | `notificar` | Envía los correos de envío, devolución, aprobación, solicitud y recordatorio. | No |
+| `enviarInforme` | Envía el informe de gestión, en Word, al correo del validador del contrato cada vez que el contratista lo envía o reenvía. | No |
 | `docxAPdf` | Convierte el Word a PDF desde la vista previa. | No |
 
 ## Convención común
@@ -467,6 +468,177 @@ La app envía `{ idToken, evento, coleccion, docId }`, con `evento` igual a
 `{ "ok": true }`. Cada intento queda registrado en `notificaciones`. Igual que
 `subirArchivo`, el flujo lee el documento (`coleccion/docId`) con el token para
 armar destinatarios y mensaje, y responde con `Access-Control-Allow-Origin: *`.
+
+## enviarInforme
+
+Cuando el contratista envía el **Informe de gestión** (o lo reenvía corregido),
+la app arma el Word, con la firma en línea, y se lo pasa a este flujo, que lo
+manda por correo al **validador del contrato**. El destinatario sale del campo
+**Correo del validador** del contrato (Información del contrato → Supervisión y
+validación): la app nunca dice a quién enviarlo. El informe queda enviado
+aunque el correo falle; la app avisa y en la página del informe queda el botón
+**Enviar al validador** para intentarlo de nuevo (sirve también si el validador
+lo necesita otra vez).
+
+### Contrato
+
+| Campo | Contenido |
+| --- | --- |
+| `idToken` | Token de sesión de Firebase. |
+| `envioId` | Id del documento en `envios`. |
+| `adjunto` | `{ "nombre": "<nombre del Word>.docx", "base64": "<el Word en base64>" }`. Máximo 10 MB. |
+
+Respuesta esperada: `200` con `{ "ok": true, "para": "<correo del validador>" }`.
+La app muestra «Informe enviado al correo del validador (`para`)».
+
+El flujo lee el envío con el token de la persona: si no es el contratista del
+envío, alguien de su equipo o un administrador, Firestore no lo deja leer y el
+flujo no envía nada. Del contrato toma el número, el nombre del contratista y
+el correo del validador.
+
+### El correo
+
+- **Para**: el correo del validador del contrato.
+- **Asunto**: `Informe de gestión No. 2 de octubre 2026 · Ana Pérez · Contrato P-00000 DE 2026`,
+  con «(corregido)» después del mes cuando es un reenvío.
+- **Cuerpo**: quién lo envió, el período y el enlace a la app para revisarlo,
+  devolverlo o darle el visto bueno. El Word va adjunto con el nombre que le
+  pone la app (si no termina en `.docx`, el flujo usa `Informe de gestión.docx`).
+- **Desde**: el buzón de la cuenta dueña de la conexión de Office 365 Outlook
+  del flujo. Igual que en `subirArchivo`, conviene una cuenta institucional que
+  no dependa de una persona. Las respuestas del validador llegan a ese buzón:
+  las observaciones deben ir por la app (Devolver).
+
+### Antes de empezar
+
+1. **Formulario actualizado**: en **Administración** (o en **Formularios**)
+   aparece «Hay una versión nueva de «Información del contrato»». Pulsa
+   **Actualizar**: así aparece el campo **Correo del validador** en Supervisión
+   y validación.
+2. **Correo en cada contrato**: lo llena el administrador o el equipo del
+   contrato en *Información del contrato*, o el administrador con la columna
+   `correoValidador` del Excel de importación de contratos.
+3. **Licencia y directivas**: como en `subirArchivo`, el dueño del flujo
+   necesita Premium, y las directivas de datos (DLP), si las hay, deben dejar
+   usar en el mismo flujo «Cuando se recibe una solicitud HTTP», «HTTP» y
+   «Office 365 Outlook».
+
+### Crear el flujo con un asistente del navegador
+
+Este prompt trae todo: nombres, orden y expresiones. Si la app no está en
+`https://medellin015.github.io/Bitacora_Contratistas/`, cambia esa dirección en
+la expresión de `Mensaje`. También sirve como guía para armarlo a mano.
+
+```text
+Construye en este navegador, en make.powerautomate.com, el flujo de nube «enviarInforme» de la app Bitácora Contratistas. Cuando un contratista envía su informe de gestión, la app le manda el Word en un POST y el flujo lo envía por correo al validador del contrato y le responde a la app. Hazlo a mano (no uses Copilot) y usa la cuenta con la que ya estoy conectado: los correos saldrán de su buzón.
+
+REGLAS PARA TODO EL FLUJO
+1. Usa los nombres de acción EXACTOS de abajo (mayúsculas y guiones bajos incluidos): las expresiones los usan. Para renombrar, haz clic en el título de la acción en su panel. Renombra cada acción ANTES de pegar expresiones que la mencionen.
+2. Lo marcado EXPRESIÓN se pega con el editor de expresiones: clic en el campo, botón fx (o escribe «/» y elige «Insertar expresión»), pega el texto tal cual y pulsa «Agregar». En el campo debe quedar una ficha de color; si queda texto suelto, bórralo y repite.
+3. Lo marcado TEXTO se escribe directo, sin fx.
+4. Si la interfaz está en inglés: Redactar = Compose; Inicializar variable = Initialize variable; Establecer variable = Set variable; Ámbito = Scope; Filtrar matriz = Filter array; Respuesta = Response; Enviar un correo electrónico (V2) = Send an email (V2); Para = To; Asunto = Subject; Cuerpo = Body; Parámetros avanzados = Advanced parameters; Datos adjuntos = Attachments; Configuración = Settings; Ejecutar después de = Run after; Directiva de reintentos = Retry policy; Ninguno = None.
+5. Si te pide una licencia Premium, si una acción no existe o si algo no coincide con estas instrucciones, detente y avísame en vez de improvisar.
+
+PASO 1. Crear el flujo
+- Crear > Flujo de nube instantáneo > nombre «enviarInforme» > desencadenador «Cuando se recibe una solicitud HTTP» (When an HTTP request is received).
+- En el desencadenador: Quién puede desencadenar el flujo = Cualquiera (Anyone). Método = POST. Esquema JSON del cuerpo de la solicitud: vacío.
+
+PASO 2. Dos variables, debajo del desencadenador y fuera de todo ámbito
+2.1 «Inicializar variable», acción llamada Inicializar_codigo: Nombre = TEXTO codigo · Tipo = Entero (Integer) · Valor = TEXTO 500
+2.2 «Inicializar variable», acción llamada Inicializar_cuerpo: Nombre = TEXTO cuerpo · Tipo = Objeto (Object) · Valor = EXPRESIÓN:
+  json('{"ok": false, "mensaje": "Falló el flujo «enviarInforme». Intenta de nuevo con «Enviar al validador»; si sigue, avisa al administrador."}')
+
+PASO 3. Ámbito llamado Intentar, debajo de las variables, con estas 9 acciones ADENTRO y en este orden
+3.1 Redactar, llamada Entrada · Entradas = EXPRESIÓN:
+  removeProperty(json(triggerBody()), 'adjunto')
+3.2 HTTP (la acción integrada «HTTP»; NO «HTTP con Microsoft Entra ID»), llamada Leer_envio · Método = GET · Autenticación = ninguna · URI = EXPRESIÓN:
+  concat('https://firestore.googleapis.com/v1/projects/bitacora-contratistas/databases/(default)/documents/envios/', uriComponent(outputs('Entrada')?['envioId']), '?mask.fieldPaths=contratoId&mask.fieldPaths=periodo&mask.fieldPaths=consecutivo&mask.fieldPaths=estado')
+  Encabezados: clave = TEXTO Authorization · valor = EXPRESIÓN:
+  concat('Bearer ', outputs('Entrada')?['idToken'])
+3.3 HTTP, llamada Leer_contrato · Método = GET · Autenticación = ninguna · el mismo encabezado Authorization con la misma expresión · URI = EXPRESIÓN:
+  concat('https://firestore.googleapis.com/v1/projects/bitacora-contratistas/databases/(default)/documents/contratos/', uriComponent(body('Leer_envio')?['fields']?['contratoId']?['stringValue']), '?mask.fieldPaths=numero&mask.fieldPaths=info.supervision.correoValidador&mask.fieldPaths=info.contratista.nombreCompleto')
+3.4 Redactar, llamada Datos · Entradas = EXPRESIÓN:
+  addProperty(addProperty(addProperty(addProperty(addProperty(addProperty(json('{}'), 'para', trim(coalesce(body('Leer_contrato')?['fields']?['info']?['mapValue']?['fields']?['supervision']?['mapValue']?['fields']?['correoValidador']?['stringValue'], ''))), 'contrato', coalesce(body('Leer_contrato')?['fields']?['numero']?['stringValue'], body('Leer_envio')?['fields']?['contratoId']?['stringValue'])), 'contratista', trim(coalesce(body('Leer_contrato')?['fields']?['info']?['mapValue']?['fields']?['contratista']?['mapValue']?['fields']?['nombreCompleto']?['stringValue'], ''))), 'numero', coalesce(body('Leer_envio')?['fields']?['consecutivo']?['integerValue'], body('Leer_envio')?['fields']?['consecutivo']?['doubleValue'], '')), 'mes', formatDateTime(concat(body('Leer_envio')?['fields']?['periodo']?['stringValue'], '-01'), 'MMMM yyyy', 'es-CO')), 'corregido', equals(body('Leer_envio')?['fields']?['estado']?['stringValue'], 'reenviado'))
+3.5 Redactar, llamada Asunto · Entradas = EXPRESIÓN:
+  concat('Informe de gestión No. ', outputs('Datos')?['numero'], ' de ', outputs('Datos')?['mes'], if(outputs('Datos')?['corregido'], ' (corregido)', ''), if(empty(outputs('Datos')?['contratista']), '', concat(' · ', outputs('Datos')?['contratista'])), ' · Contrato ', outputs('Datos')?['contrato'])
+3.6 Redactar, llamada Mensaje · Entradas = EXPRESIÓN:
+  concat('<p>Cordial saludo.</p><p>', if(empty(outputs('Datos')?['contratista']), 'El contratista', replace(replace(replace(outputs('Datos')?['contratista'], '&', '&amp;'), '<', '&lt;'), '>', '&gt;')), if(outputs('Datos')?['corregido'], ' reenvió, con las correcciones,', ' envió'), ' el informe de gestión No. ', outputs('Datos')?['numero'], ' de ', outputs('Datos')?['mes'], ' del contrato ', replace(replace(replace(outputs('Datos')?['contrato'], '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '. Va adjunto en Word, con la firma en línea.</p><p>Para revisarlo, devolverlo con observaciones o darle el visto bueno, entra a <a href="https://medellin015.github.io/Bitacora_Contratistas/">Bitácora Contratistas</a>.</p><p style="color:#6b7280;font-size:12px">Correo automático de Bitácora Contratistas.</p>')
+3.7 Office 365 Outlook > «Enviar un correo electrónico (V2)», llamada Enviar_correo. Si pide iniciar sesión en Office 365 Outlook, usa esta misma cuenta.
+  - Para = EXPRESIÓN outputs('Datos')?['para']
+  - Asunto = EXPRESIÓN outputs('Asunto')
+  - Cuerpo = EXPRESIÓN outputs('Mensaje')
+  - En «Parámetros avanzados» muestra «Datos adjuntos» y agrega un elemento (Add new item):
+    Nombre de los datos adjuntos - 1 (Attachments Name - 1) = EXPRESIÓN:
+    if(endsWith(coalesce(json(triggerBody())?['adjunto']?['nombre'], ''), '.docx'), json(triggerBody())?['adjunto']?['nombre'], 'Informe de gestión.docx')
+    Contenido de los datos adjuntos - 1 (Attachments Content - 1) = EXPRESIÓN:
+    json(triggerBody())?['adjunto']?['base64']
+  - Deja vacíos «Desde (Enviar como)», CC y CCO.
+3.8 Establecer variable, llamada Exito_codigo: Nombre = codigo · Valor = TEXTO 200
+3.9 Establecer variable, llamada Exito_cuerpo: Nombre = cuerpo · Valor = EXPRESIÓN:
+  addProperty(json('{"ok": true}'), 'para', outputs('Datos')?['para'])
+
+PASO 4. Ámbito llamado Capturar, debajo de Intentar y FUERA de él
+- Configuración > Ejecutar después de: en Intentar marca «Error» (has failed) y «Ha agotado el tiempo de espera» (has timed out); al final desmarca «Correcto» (is successful).
+- Adentro, en este orden:
+4.1 Filtrar matriz, llamada Filtrar_fallo · Desde = EXPRESIÓN result('Intentar') · Condición: en «modo avanzado» escribe @equals(item()?['status'], 'Failed') (en modo básico: izquierda EXPRESIÓN item()?['status'], operador «es igual a», derecha TEXTO Failed).
+4.2 Establecer variable, llamada Error_codigo: Nombre = codigo · Valor = EXPRESIÓN:
+  if(contains(createArray('Leer_envio', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 403, 500)
+4.3 Establecer variable, llamada Error_cuerpo: Nombre = cuerpo · Valor = EXPRESIÓN:
+  addProperty(json('{"ok": false}'), 'mensaje', if(contains(createArray('Leer_envio', 'Leer_contrato'), first(body('Filtrar_fallo'))?['name']), 'No se pudo verificar tu sesión o tu permiso sobre este envío. Recarga la página e inténtalo de nuevo.', if(equals(first(body('Filtrar_fallo'))?['name'], 'Enviar_correo'), 'Outlook no aceptó el correo. Revisa el correo del validador en el contrato (Información del contrato → Supervisión y validación) y vuelve a intentarlo con «Enviar al validador».', 'Falló el flujo «enviarInforme». Intenta de nuevo con «Enviar al validador»; si sigue, avisa al administrador.')))
+
+PASO 5. Acción «Respuesta» (Response), llamada Respuesta, debajo de Capturar y fuera de los ámbitos
+- Configuración > Ejecutar después de: en Capturar marca las cuatro casillas: Correcto, Ha agotado el tiempo de espera, Se ha omitido y Error.
+- Código de estado = EXPRESIÓN variables('codigo')
+- Encabezados: TEXTO Content-Type = TEXTO application/json · TEXTO Access-Control-Allow-Origin = TEXTO *
+- Cuerpo = EXPRESIÓN variables('cuerpo')
+- Respuesta asincrónica: desactivada.
+
+PASO 6. Sin reintentos
+En Leer_envio, Leer_contrato y Enviar_correo: Configuración > Redes > Directiva de reintentos = Ninguno. (Un reintento de Enviar_correo podría mandar el correo dos veces.)
+
+PASO 7. Revisar, guardar y darme la URL
+- Deben quedar 17 acciones además del desencadenador: 2 de variables, Intentar con 9 adentro, Capturar con 3 adentro y Respuesta.
+- En «Vista de código» (Code view) de Enviar_correo, en Attachments debe verse ContentBytes con json(triggerBody())?['adjunto']?['base64'] (sin base64ToBinary ni otra función alrededor).
+- Guarda. Si arriba aparecen «Guardar borrador» y «Publicar» en vez de «Guardar», pulsa «Publicar».
+- Abre el desencadenador y copia la «HTTP URL» (empieza por https:// y termina con sig=…). Muéstramela solo a mí, sin pegarla en ningún otro sitio.
+- No actives todavía «Entradas seguras» ni «Salidas seguras»: eso va después de que yo pruebe desde la app.
+```
+
+### Probar y conectar
+
+1. Guarda el flujo (o **Publicar**, si es de solución), copia la «HTTP URL» del
+   disparador, pégala en **Parámetros → enviarInforme** y pulsa «Guardar
+   cambios». Quien ya tenía la app abierta debe recargarla (F5).
+2. Revisa que el contrato de prueba tenga **Correo del validador** (pon uno
+   tuyo para la prueba). En la página del **Informe de gestión** de ese
+   contrato, con un informe ya enviado, pulsa **Enviar al validador**. Debe
+   salir «Informe enviado al correo del validador (…)» y llegar el correo con
+   el Word adjunto; ábrelo y revisa que se vea bien.
+3. Desde ahí, cada envío o reenvío del informe le llega al validador sin hacer
+   nada más.
+4. Cuando funcione, activa **Entradas seguras** y **Salidas seguras** en el
+   disparador, `Leer_envio`, `Leer_contrato`, `Enviar_correo` y `Filtrar_fallo`
+   (en `Entrada`, solo **Entradas seguras**), y guarda. Así el token y el Word
+   no quedan visibles en el historial de ejecuciones.
+
+### Problemas frecuentes
+
+La app muestra cada error así: «No se pudo enviar al correo del validador:
+*mensaje*».
+
+| La app dice… | Causa probable | Qué hacer |
+| --- | --- | --- |
+| «No se envió al correo del validador: falta configurar el flujo «enviarInforme» en Parámetros…» | El contrato tiene correo del validador, pero no hay URL del flujo (o no empieza por `https://`). | Pega la URL en Parámetros y pulsa «Guardar cambios»; luego F5. |
+| «No se envió al correo del validador: el contrato no tiene su correo…» | El campo **Correo del validador** está vacío. | Llénalo en *Información del contrato → Supervisión y validación* y usa «Enviar al validador». |
+| «…No se pudo verificar tu sesión o tu permiso sobre este envío…» | Falló `Leer_envio` o `Leer_contrato`: Firestore respondió 401, 403 o 404. | Recarga la página e inténtalo de nuevo. Si sigue, mira el código en el historial del flujo. |
+| «…Outlook no aceptó el correo…» | El correo del validador está mal escrito, la conexión de Office 365 Outlook venció o el buzón llegó a su límite de envíos. | Corrige el correo en el contrato. Si está bien, en el historial abre `Enviar_correo` y lee el error; si es la conexión, vuelve a iniciar sesión en ella. |
+| «…Falló el flujo «enviarInforme»…» | Falló otra acción de «Intentar», casi siempre una expresión que quedó como texto. | En el historial, abre «Intentar», mira qué acción quedó en rojo y vuelve a pegar su expresión con *fx*. |
+| «No se pudo conectar con el flujo «enviarInforme»…» | Lo mismo que en `subirArchivo`: falta `Access-Control-Allow-Origin` en «Respuesta», el flujo está apagado o «Quién puede desencadenar» no es «Cualquiera». | Revisa la acción «Respuesta» y el disparador. |
+| «El Word supera 10 MB; no se puede enviar por correo» | El informe trae muchas imágenes pesadas. | Descárgalo y envíalo a mano, o reduce las imágenes. |
+
+Si la URL se filtra, apágala y cámbiala como se explica al final de
+`subirArchivo`. Como el destinatario sale siempre del contrato, nadie puede
+usar el flujo para escribirle a otras direcciones.
 
 ## docxAPdf
 
