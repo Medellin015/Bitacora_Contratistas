@@ -288,10 +288,13 @@ const App = () => {
       setUsuario(perfil); setRol(rolVista); setPropios(perfil.rol === 'contratista' ? [] : mios);
       setParametros(p); setFormularios(fs); setCatalogos(cs); setContratos(lista); setVentanas(vs);
       setContratoId((actual) => (lista.some((c) => c.id === actual) ? actual : (lista[0] ? lista[0].id : '')));
-      // Período por defecto: el de la ventana abierta; si no hay, el mes anterior.
+      // Período por defecto: el mes anterior (el que se suele informar) o el actual si su ventana está
+      // abierta; si no, la ventana abierta más antigua (puede haber varias, p. ej. de septiembre a
+      // diciembre); sin ninguna abierta, el mes anterior.
       const ahora = new Date();
-      const abierta = vs.find((v) => U.esFecha(v.desde) && U.esFecha(v.hasta) && ahora >= v.desde && ahora <= v.hasta);
-      if (!silencioso) setPeriodo(abierta ? abierta.periodo : U.periodoAnterior(U.periodoActual()));
+      const abiertas = vs.filter((v) => U.esFecha(v.desde) && U.esFecha(v.hasta) && ahora >= v.desde && ahora <= v.hasta).map((v) => v.periodo).sort();
+      const anterior = U.periodoAnterior(U.periodoActual());
+      if (!silencioso) setPeriodo([anterior, U.periodoActual()].find((x) => abiertas.includes(x)) || abiertas[0] || anterior);
       setEstado('listo');
     } catch (e) {
       console.error(e);

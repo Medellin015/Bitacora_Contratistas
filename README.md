@@ -74,6 +74,14 @@ bloquea `gstatic.com`), también abre en demostración y lo avisa en el banner.
 Cada vez que cambie `firestore.rules` hay que volver a publicarlas
 (`firebase deploy --only firestore:rules`, o pegarlas en Firestore → Reglas).
 
+Las **Ventanas** (una por período) dicen entre qué fechas se puede diligenciar y
+enviar cada formulario. **Abrir varios meses** abre un rango de períodos de una
+vez con las mismas fechas (por defecto, del mes anterior a dos meses adelante,
+desde hoy hasta el fin del mes siguiente al último) y escribe el aviso de cada
+mes; si un período ya tenía ventana, se reemplaza. Con varias ventanas
+abiertas, la app entra en el mes anterior (o en el actual) si su ventana está
+abierta; si no, en la abierta más antigua.
+
 Los formularios viven en Firestore: cambiar sus plantillas base en `js/datos.js`
 no toca los ya sembrados. Cuando una plantilla base sube de versión, el inicio
 del administrador y **Formularios** muestran «Hay una versión nueva…» con el

@@ -439,6 +439,12 @@ const PaginaAdminUsuarios = () => {
 };
 
 /* ===== 5. Ventanas ===== */
+// Aviso del inicio de la ventana de un período: qué se puede diligenciar y entre qué fechas (sin la
+// cuenta de cobro mientras esté deshabilitada).
+const avisoDeVentana = (app, periodo, formularios, desde, hasta) => {
+  const nombres = formularios.filter((id) => { const fm = app.formularios.find((x) => x.id === id); return !fm || procesoHabilitado(app, fm.tipo); }).map((id) => nombreFormulario(app, id)).join(' e ');
+  return `Para el mes de <b>${U.nombrePeriodo(periodo).toUpperCase()}</b> la plataforma quedará habilitada para diligenciar ${nombres} ${U.textoVentana({ desde, hasta })}. Para corregir algo ya enviado, usa <b>Solicitar corrección</b> en el envío.`;
+};
 const ModalVentana = ({ ventana, onCerrar, onGuardado }) => {
   const app = useApp();
   const formularios = app.formularios.filter((f) => f.activo && requiereVentana(f));
@@ -449,12 +455,7 @@ const ModalVentana = ({ ventana, onCerrar, onGuardado }) => {
   });
   const [guardando, setGuardando] = useState(false);
   const desde = U.dateDeLocal(f.desde), hasta = U.dateDeLocal(f.hasta);
-  const generarAviso = () => {
-    if (!desde || !hasta) return;
-    // Lo que el contratista puede diligenciar: sin la cuenta de cobro mientras esté deshabilitada.
-    const nombres = f.formularios.filter((id) => { const fm = app.formularios.find((x) => x.id === id); return !fm || procesoHabilitado(app, fm.tipo); }).map((id) => nombreFormulario(app, id)).join(' e ');
-    setF({ ...f, aviso: `Para el mes de <b>${U.nombrePeriodo(f.periodo).toUpperCase()}</b> la plataforma quedará habilitada para diligenciar ${nombres} ${U.textoVentana({ desde, hasta })}. Para corregir algo ya enviado, usa <b>Solicitar corrección</b> en el envío.` });
-  };
+  const generarAviso = () => { if (desde && hasta) setF({ ...f, aviso: avisoDeVentana(app, f.periodo, f.formularios, desde, hasta) }); };
   const guardar = async () => {
     if (!/^\d{4}-\d{2}$/.test(f.periodo)) { app.avisar('alerta', 'Período inválido (AAAA-MM)'); return; }
     if (!desde || !hasta || hasta <= desde) { app.avisar('alerta', 'Revisa las fechas: el cierre debe ser posterior a la apertura'); return; }
@@ -482,6 +483,56 @@ const ModalVentana = ({ ventana, onCerrar, onGuardado }) => {
     </Modal>
   );
 };
+// Varios meses de una vez (p. ej. de septiembre a diciembre): la misma apertura, cierre y formularios en
+// cada período; si ya tenía ventana, se reemplaza. Por defecto, del mes anterior a dos meses adelante, desde
+// hoy y hasta el fin del mes siguiente al último (su informe se envía después de que termina).
+const ModalVariasVentanas = ({ existentes, onCerrar, onGuardado }) => {
+  const app = useApp();
+  const formularios = app.formularios.filter((f) => f.activo && requiereVentana(f));
+  const [f, setF] = useState(() => {
+    const actual = U.periodoActual();
+    const ultimo = U.desplazarPeriodo(actual, 2);
+    return { desdeP: U.periodoAnterior(actual), hastaP: ultimo, desde: `${U.hoyISO()}T00:00`, hasta: `${U.rangoPeriodo(U.periodoSiguiente(ultimo)).hasta}T22:00`, formularios: formularios.map((x) => x.id) };
+  });
+  const [guardando, setGuardando] = useState(false);
+  const desde = U.dateDeLocal(f.desde), hasta = U.dateDeLocal(f.hasta);
+  const periodos = /^\d{4}-\d{2}$/.test(f.desdeP) && /^\d{4}-\d{2}$/.test(f.hastaP) && f.desdeP <= f.hastaP ? U.listaPeriodos(f.desdeP, f.hastaP) : [];
+  const actuales = new Map((existentes || []).map((v) => [v.periodo, v]));
+  const guardar = async () => {
+    if (!periodos.length) { app.avisar('alerta', 'Revisa los períodos: el primero no puede ser posterior al último'); return; }
+    if (periodos.length > 24) { app.avisar('alerta', 'Máximo 24 meses a la vez'); return; }
+    if (!desde || !hasta || hasta <= desde) { app.avisar('alerta', 'Revisa las fechas: el cierre debe ser posterior a la apertura'); return; }
+    if (!f.formularios.length) { app.avisar('alerta', 'Elige al menos un formulario'); return; }
+    setGuardando(true);
+    try {
+      for (const p of periodos) await DB.guardarVentana(p, { periodo: p, desde, hasta, formularios: f.formularios, aviso: U.sanitizarHTML(avisoDeVentana(app, p, f.formularios, desde, hasta)) });
+      app.avisar('exito', `${periodos.length} ${U.plural(periodos.length, 'ventana guardada', 'ventanas guardadas')}`);
+      onGuardado();
+    } catch (e) { app.avisar('error', DB.traducirError(e)); } finally { setGuardando(false); }
+  };
+  return (
+    <Modal titulo="Abrir varios meses" ancho="ancho" onCerrar={onCerrar} pie={<><Boton onClick={onCerrar}>Cancelar</Boton><Boton variante="primario" icono="check" cargando={guardando} disabled={!periodos.length} onClick={guardar}>{periodos.length ? `Abrir ${periodos.length} ${U.plural(periodos.length, 'mes', 'meses')}` : 'Abrir'}</Boton></>}>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Campo etiqueta="Desde el período" obligatoria><Entrada type="month" className="mono" value={f.desdeP} onChange={(e) => setF({ ...f, desdeP: e.target.value })} /></Campo>
+        <Campo etiqueta="Hasta el período" obligatoria><Entrada type="month" className="mono" value={f.hastaP} onChange={(e) => setF({ ...f, hastaP: e.target.value })} /></Campo>
+        <Campo etiqueta="Abren (hora de Bogotá)" obligatoria><Entrada type="datetime-local" className="mono" value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></Campo>
+        <Campo etiqueta="Cierran (hora de Bogotá)" obligatoria ayuda="Las mismas fechas para todos los meses."><Entrada type="datetime-local" className="mono" value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></Campo>
+        <Campo etiqueta="Formularios habilitados" obligatoria className="md:col-span-2">
+          <div className="grid gap-1">{formularios.map((x) => <label key={x.id} className="flex items-center gap-2 text-sm"><input type="checkbox" className="caja" checked={f.formularios.includes(x.id)} onChange={(e) => setF({ ...f, formularios: e.target.checked ? [...f.formularios, x.id] : f.formularios.filter((y) => y !== x.id) })} />{x.nombre}</label>)}</div>
+        </Campo>
+        <div className="md:col-span-2">
+          <div className="etiqueta mb-1">Quedan abiertos</div>
+          {periodos.length ? (
+            <ul className="grid gap-1 text-sm">{periodos.map((p) => (
+              <li key={p} className="flex flex-wrap items-center gap-2"><strong className="mono">{U.nombrePeriodo(p)}</strong>{actuales.has(p) ? <Chip tipo="alerta">reemplaza la que tiene (cierra {U.fechaHora(actuales.get(p).hasta)})</Chip> : <Chip tipo="info">nueva</Chip>}</li>
+            ))}</ul>
+          ) : <p className="text-sm texto-3">Elige un rango válido: el primer período no puede ser posterior al último.</p>}
+          <p className="text-xs texto-2 mt-2">El aviso del inicio de cada mes se escribe solo con estas fechas.</p>
+        </div>
+      </div>
+    </Modal>
+  );
+};
 const PaginaAdminVentanas = () => {
   const app = useApp();
   const [modal, setModal] = useState(null);
@@ -494,13 +545,14 @@ const PaginaAdminVentanas = () => {
   const chip = (v) => { const e = U.estadoVentana(v, null, ahora); return e.estado === 'abierta' ? <Chip tipo="exito" icono="reloj">Abierta · cierra en {U.cuentaRegresiva(e.faltan)}</Chip> : e.estado === 'por_abrir' ? <Chip tipo="info" icono="calendario">Abre en {U.cuentaRegresiva(e.faltan)}</Chip> : <Chip tipo="neutro" icono="candado">Cerrada</Chip>; };
   return (
     <div>
-      <Encabezado titulo="Ventanas de diligenciamiento" subtitulo="Fechas en que los contratistas pueden enviar cada formulario (hora de Bogotá)." acciones={<Boton tam="sm" variante="primario" icono="mas" onClick={() => setModal('nueva')}>Nueva ventana</Boton>} />
+      <Encabezado titulo="Ventanas de diligenciamiento" subtitulo="Fechas en que los contratistas pueden enviar cada formulario (hora de Bogotá)." acciones={<><Boton tam="sm" icono="calendario" onClick={() => setModal('varias')}>Abrir varios meses</Boton><Boton tam="sm" variante="primario" icono="mas" onClick={() => setModal('nueva')}>Nueva ventana</Boton></>} />
       <Tabla cargando={cargando} filas={datos || []} claveFila={(v) => v.periodo} vacio={<Vacio icono="ventana" titulo="Sin ventanas" texto="Crea la ventana del período para habilitar los formularios." />} columnas={[
         { titulo: 'Período', render: (v) => <strong className="mono">{U.nombrePeriodo(v.periodo)}</strong> }, { titulo: 'Estado', render: chip },
         { titulo: 'Abre', render: (v) => <span className="mono text-xs">{U.fechaHora(v.desde)}</span> }, { titulo: 'Cierra', render: (v) => <span className="mono text-xs">{U.fechaHora(v.hasta)}</span> },
         { titulo: 'Formularios', render: (v) => (v.formularios || []).map((id) => nombreFormulario(app, id)).join(', ') },
       ]} acciones={(v) => <><Boton tam="xs" icono="editar" onClick={() => setModal(v)}>Editar</Boton><Boton tam="xs" variante="fantasma" icono="basura" soloIcono titulo="Eliminar" onClick={() => eliminar(v)} /></>} />
-      {modal ? <ModalVentana ventana={modal === 'nueva' ? null : modal} onCerrar={() => setModal(null)} onGuardado={() => { setModal(null); recargar(true); app.recargarTodo(); }} /> : null}
+      {modal === 'varias' ? <ModalVariasVentanas existentes={datos || []} onCerrar={() => setModal(null)} onGuardado={() => { setModal(null); recargar(true); app.recargarTodo(); }} />
+        : modal ? <ModalVentana ventana={modal === 'nueva' ? null : modal} onCerrar={() => setModal(null)} onGuardado={() => { setModal(null); recargar(true); app.recargarTodo(); }} /> : null}
     </div>
   );
 };
