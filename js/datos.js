@@ -1442,6 +1442,17 @@
       return { id, consecutivo: n };
     });
     DB.actualizarEnvio = (id, parcial) => A.update('envios', id, { ...parcial, actualizadoEn: ahora() });
+    // Firmas en línea del envío (envios/{id}/firmas/contratista|validador): imagen de la firma, quién
+    // y cuándo. La del contratista se pone al enviar o reenviar; la del validador, al aprobar. Las que
+    // no se pueden leer (no existen, o las reglas aún no se publicaron) llegan como null.
+    DB.obtenerFirmasEnvio = async (envioId) => {
+      const leer = (quien) => A.subGet('envios', envioId, 'firmas', quien).catch(() => null);
+      const [contratista, validador] = await Promise.all([leer('contratista'), leer('validador')]);
+      return { contratista: contratista || null, validador: validador || null };
+    };
+    DB.firmarEnvio = (envioId, quien, { pngBase64, ancho, alto, uid, nombre, rol }) => A.subSet('envios', envioId, 'firmas', quien, {
+      quien, pngBase64, ancho: Number(ancho) || 0, alto: Number(alto) || 0, uid, nombre: nombre || '', rol: rol || '', firmadoEn: ahora(),
+    });
     DB.ultimoEnvio = async ({ rol, uid, contratoId, formularioId }) => {
       const lista = await DB.listarEnvios({ rol, uid, contratoId, formularioId });
       return lista.length ? lista[0] : null;

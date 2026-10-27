@@ -115,6 +115,32 @@ El contratista ve cuatro apartados: **Inicio** (el tablero del período),
 - **Mis envíos** y **Solicitudes** ya no van en el menú; se llega a ellas desde
   Inicio («Últimos envíos → Ver todos» e «Ir a solicitudes»).
 
+### Firma en línea del informe
+
+El informe de gestión se firma en la plataforma, sin imprimir:
+
+- **Contratista**: «Finalizar y enviar» (o «Reenviar corrección») pide
+  **Firmar y enviar**. Propone la firma guardada en **Mi perfil**; si no hay,
+  se dibuja en pantalla con el dedo, un lápiz o el mouse, o se sube una imagen,
+  y puede quedar guardada para la próxima vez. Quien diligencia en nombre del
+  contratista no firma por él.
+- **Validador**: la aprobación final («Aprobar», del coordinador o de quien
+  tenga el último paso) pide **Firmar Vo.Bo. y aprobar**. Las aprobaciones
+  intermedias no piden firma.
+- **En el Word**: «Firma del contratista» lleva su firma y debajo «Firmado en
+  línea el DD/MM/AAAA HH:MM»; «Vo.Bo. VALIDADOR» lleva la firma de quien aprobó
+  y «Firmado en línea por <nombre> el …». El Vo.Bo. solo sale mientras el
+  informe esté aprobado: si se reabre, desaparece hasta la nueva aprobación, y
+  al reenviar la corrección el contratista vuelve a firmar.
+- Cada firma se guarda con el envío en `envios/{id}/firmas/contratista` y
+  `…/validador` (imagen, quién, rol y fecha y hora). Los envíos anteriores, sin
+  firma en línea, siguen saliendo con la firma del perfil.
+- En **Mi perfil → Firma para el Word** se puede dibujar o subir la firma.
+
+Requiere publicar `firestore.rules` (ver arriba). Mientras no estén publicadas,
+el envío y la aprobación funcionan igual, la app avisa que la firma en línea no
+se guardó y el Word usa la firma del perfil.
+
 ### Lector de planillas de seguridad social
 
 En la cuenta de cobro, al adjuntar el PDF de la planilla en **Planillas
@@ -195,6 +221,11 @@ que no está declarado queda denegado.
 - **Revisor y coordinador**: ven los contratos, envíos y solicitudes donde están
   asignados, y el perfil y la firma de quien tienen asignado (van en el Word).
   Cambian el estado del envío, siempre con una entrada nueva en el historial.
+- **Firmas en línea** (`envios/{id}/firmas`): las leen el dueño del envío, su
+  equipo y el admin. La del contratista la pone él, con su cuenta, mientras el
+  envío está enviado o reenviado; la del Vo.Bo., el equipo del contrato o el
+  admin con el envío ya aprobado. Cada una pesa a lo sumo ~150 KB y su hora debe
+  estar a menos de 15 minutos de la del servidor.
 - **Administrador**: todo, salvo sobrescribir un perfil, contrato o envío
   existente al «crear».
 - **Activación de respaldo**: solo si la cuenta ya existía sin perfil cuando se

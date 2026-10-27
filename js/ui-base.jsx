@@ -8,6 +8,7 @@
      5. Modales, confirmación, toasts
      6. Tablas responsivas, listas de datos, línea de tiempo, pestañas, estados vacíos
      7. Vista previa de Word (modal)
+     8. Recuadro para firmar (firma en línea)
    ============================================================================ */
 const { useState, useEffect, useMemo, useRef, useCallback, useContext, createContext } = React;
 
@@ -402,5 +403,89 @@ const VistaPreviaDocx = ({ titulo, generar, onCerrar }) => {
       {estado.error ? <Alerta tipo="alerta">No se pudo mostrar la vista previa ({estado.error}). {estado.archivo ? 'Puedes descargar el Word.' : ''}</Alerta> : null}
       <div className="docx-vista mt-2" ref={ref} style={{ display: estado.cargando || estado.error ? 'none' : 'block' }} />
     </Modal>
+  );
+};
+
+/* ===== 8. Recuadro para firmar ===== */
+// Se firma con el dedo, un lápiz o el mouse (eventos pointer). padRef recibe { limpiar(), vacio(),
+// exportar() }: exportar() recorta lo que sobra alrededor de la firma y devuelve { pngBase64, ancho,
+// alto } (PNG con fondo transparente, máximo 900 px de ancho), o null si no hay trazos.
+const PadFirma = ({ padRef, onCambio, etiqueta = 'Recuadro para firmar' }) => {
+  const lienzo = useRef(null);
+  const trazo = useRef(null);       // último punto del trazo en curso
+  const vacioRef = useRef(true);
+  const [vacio, setVacio] = useState(true);
+  const TINTA = '#111827';
+  useEffect(() => {
+    // Resolución real del lienzo según su tamaño en la página (sin las animaciones del modal) y la
+    // densidad de píxeles de la pantalla.
+    const c = lienzo.current;
+    const escala = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    c.width = Math.max(1, Math.round(c.clientWidth * escala));
+    c.height = Math.max(1, Math.round(c.clientHeight * escala));
+  }, []);
+  const marcar = (v) => { vacioRef.current = v; setVacio(v); if (onCambio) onCambio(v); };
+  // Coordenadas en píxeles del lienzo (k: píxeles del lienzo por píxel en pantalla).
+  const punto = (e) => {
+    const c = lienzo.current; const r = c.getBoundingClientRect(); const k = c.width / (r.width || 1);
+    return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k, k };
+  };
+  const empezar = (e) => {
+    if (e.button > 0) return;
+    e.preventDefault();
+    const c = lienzo.current;
+    try { c.setPointerCapture(e.pointerId); } catch (err) { /* sin captura, igual dibuja */ }
+    const p = punto(e);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = TINTA;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 1.3 * p.k, 0, Math.PI * 2); ctx.fill();
+    trazo.current = p;
+    if (vacioRef.current) marcar(false);
+  };
+  const mover = (e) => {
+    if (!trazo.current) return;
+    e.preventDefault();
+    const ctx = lienzo.current.getContext('2d');
+    ctx.strokeStyle = TINTA; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const eventos = (e.nativeEvent && e.nativeEvent.getCoalescedEvents && e.nativeEvent.getCoalescedEvents()) || [];
+    for (const ev of (eventos.length ? eventos : [e])) {
+      const p = punto(ev);
+      ctx.lineWidth = 2.6 * p.k;
+      ctx.beginPath(); ctx.moveTo(trazo.current.x, trazo.current.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      trazo.current = p;
+    }
+  };
+  const terminar = () => { trazo.current = null; };
+  const limpiar = () => { const c = lienzo.current; c.getContext('2d').clearRect(0, 0, c.width, c.height); marcar(true); };
+  const exportar = () => {
+    const c = lienzo.current;
+    const { data, width, height } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (data[(y * width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      }
+    }
+    if (x1 < 0) return null;
+    const m = Math.round(4 * (c.width / (c.getBoundingClientRect().width || c.width)));
+    x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(width - 1, x1 + m); y1 = Math.min(height - 1, y1 + m);
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    const f = Math.min(1, 900 / w);
+    const s = document.createElement('canvas'); s.width = Math.max(1, Math.round(w * f)); s.height = Math.max(1, Math.round(h * f));
+    s.getContext('2d').drawImage(c, x0, y0, w, h, 0, 0, s.width, s.height);
+    return { pngBase64: s.toDataURL('image/png').split(',')[1], ancho: s.width, alto: s.height };
+  };
+  useEffect(() => { if (padRef) padRef.current = { limpiar, exportar, vacio: () => vacioRef.current }; });
+  return (
+    <div className="pad-firma">
+      <div className="pad-firma-marco">
+        <canvas ref={lienzo} className="pad-firma-lienzo" role="img" aria-label={etiqueta} onPointerDown={empezar} onPointerMove={mover} onPointerUp={terminar} onPointerCancel={terminar} />
+        <div className="pad-firma-linea" aria-hidden="true" />
+      </div>
+      <div className="flex items-center justify-between gap-2 mt-1">
+        <span className="text-xs texto-3">Firma dentro del recuadro con el dedo, un lápiz o el mouse.</span>
+        <Boton tam="xs" variante="fantasma" icono="basura" disabled={vacio} onClick={limpiar}>Borrar</Boton>
+      </div>
+    </div>
   );
 };

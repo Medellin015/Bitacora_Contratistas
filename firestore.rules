@@ -14,7 +14,7 @@ rules_version = '2';
 //   3. Configuración: parametros, formularios, catalogos, ventanas
 //   4. usuarios (+ privado/firma) y preRegistro
 //   5. contratos (+ cambios)
-//   6. borradores, envios y contadores
+//   6. borradores, envios (+ firmas en línea) y contadores
 //   7. solicitudes y notificaciones
 // ============================================================================
 service cloud.firestore {
@@ -227,11 +227,37 @@ service cloud.firestore {
             || request.resource.data.datosDescarga.diff(resource.data.datosDescarga).affectedKeys().hasOnly(['voBoTexto']));
     }
 
+    // Firma en línea (envios/{id}/firmas/{quien}): la imagen de la firma, quién y cuándo. La del
+    // contratista la pone el dueño del envío al enviarlo o reenviarlo; la del Vo.Bo. del validador,
+    // quien lo aprueba (el equipo del contrato o el admin), con el envío ya aprobado. La hora la pone
+    // el navegador (como en el resto de la app): debe estar a menos de 15 minutos de la del servidor,
+    // margen para un reloj mal puesto que no deja inventar la fecha.
+    function rutaEnvio(id) { return /databases/$(database)/documents/envios/$(id); }
+    function firmaEnLinea(envioId, quien) {
+      let e = get(rutaEnvio(envioId)).data;
+      let d = request.resource.data;
+      return d.keys().hasOnly(['quien', 'pngBase64', 'ancho', 'alto', 'uid', 'nombre', 'rol', 'firmadoEn'])
+        && d.quien == quien
+        && d.uid == request.auth.uid
+        && d.pngBase64 is string && d.pngBase64.size() > 0 && d.pngBase64.size() <= 204800
+        && d.firmadoEn is timestamp
+        && d.firmadoEn > request.time - duration.value(15, 'm')
+        && d.firmadoEn < request.time + duration.value(15, 'm')
+        && ((quien == 'contratista' && esDuenoDoc(e) && e.estado in ['enviado', 'reenviado'])
+            || (quien == 'validador' && (esEquipoDoc(e) || esAdmin()) && e.estado == 'aprobado'));
+    }
+
     match /envios/{envioId} {
       allow get, list: if esAdmin() || esDuenoOEquipo(resource.data);
       allow create: if esAdmin() || envioPropioValido(envioId);
       allow update: if (esAdmin() && noCambia('enviadoEn')) || correccionPropia() || transicionDelEquipo();
       allow delete: if esAdmin();
+
+      match /firmas/{quien} {
+        allow get, list: if esAdmin() || esDuenoOEquipo(get(rutaEnvio(envioId)).data);
+        allow create, update: if firmaEnLinea(envioId, quien);
+        allow delete: if esAdmin();
+      }
     }
 
     // Consecutivo por contrato y formulario: solo avanza.

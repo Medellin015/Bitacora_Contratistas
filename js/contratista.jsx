@@ -85,6 +85,94 @@ const correccionVigente = (envio, ahora = new Date()) => !!(envio && envio.enCor
 const nombreFormulario = (app, id) => { const f = app.formularios.find((x) => x.id === id); return f ? f.nombre : id; };
 const limiteDe = (formulario) => (formulario.config && formulario.config.limiteMensual != null ? Number(formulario.config.limiteMensual) : null);
 const requiereVentana = (formulario) => !!(formulario.config && formulario.config.requiereVentana);
+/* ----- Firma en línea (informe: el contratista al enviar, el validador al aprobar) ----- */
+// Formularios cuyo Word lleva la firma del contratista y el Vo.Bo. del validador.
+const admiteFirmaEnLinea = (formulario) => !!formulario && formulario.plantillaDescarga === 'informe_itm_sif';
+// Una firma en línea vale para el envío tal como está si se hizo después del último paso que la pide
+// (enviar o reenviar, la del contratista; aprobar, la del validador): la app guarda la firma justo
+// después de ese paso, con la hora del mismo navegador. Así, si la nueva no se pudo guardar, la
+// anterior no pasa por la de ahora.
+const firmaVigente = (firma, envio, estados) => {
+  if (!firma || !firma.firmadoEn) return null;
+  const pasos = (envio.historial || []).filter((h) => estados.includes(h.estado)).map((h) => new Date(h.fecha).getTime()).filter((t) => !isNaN(t));
+  return !pasos.length || new Date(firma.firmadoEn).getTime() >= Math.max(...pasos) ? firma : null;
+};
+// Por qué no se guardó una firma en línea: sin permiso, lo más probable es que falte publicar las reglas.
+const motivoFirma = (e) => (e && e.code === 'permission-denied' ? 'el servidor no la aceptó; si la app se acaba de actualizar, el administrador debe publicar las reglas de Firestore' : DB.traducirError(e));
+// Imagen (PNG, JPG o WebP) → { pngBase64, ancho, alto } que cabe en 150 KB (se reduce en canvas).
+const firmaDeImagen = async (archivo) => {
+  const invalida = (mensaje) => { const e = new Error(mensaje); e.code = 'firma-invalida'; return e; };
+  if (!archivo || !/image\/(png|jpeg|jpg|webp)/.test(archivo.type)) throw invalida('Usa una imagen PNG (fondo transparente) o JPG');
+  const dataUrl = await U.leerArchivoDataURL(archivo);
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(invalida('No se pudo leer la imagen')); i.src = dataUrl; });
+  let ancho = Math.min(img.width, 900), alto = Math.round(img.height * (ancho / img.width));
+  let base64 = '';
+  for (let intento = 0; intento < 6; intento++) {
+    const c = document.createElement('canvas'); c.width = ancho; c.height = alto;
+    c.getContext('2d').drawImage(img, 0, 0, ancho, alto);
+    base64 = c.toDataURL('image/png').split(',')[1];
+    if (base64.length * 0.75 <= 150 * 1024) break;
+    ancho = Math.round(ancho * 0.8); alto = Math.round(alto * 0.8);
+  }
+  if (base64.length * 0.75 > 150 * 1024) throw invalida('La firma sigue pesando más de 150 KB; recórtala o usa menos resolución');
+  return { pngBase64: base64, ancho, alto };
+};
+// Pide la firma para un documento: la guardada en «Mi perfil», o una dibujada o subida en el momento
+// (que puede quedar guardada). onListo({ pngBase64, ancho, alto }) con la firma, u onListo(null).
+const ModalFirmar = ({ titulo, mensaje, textoOk, onListo }) => {
+  const app = useApp();
+  const uid = app.usuario.id;
+  const { datos: guardada, cargando } = useCarga(() => DB.obtenerFirma(uid).catch(() => null), [uid]);
+  const tieneGuardada = !!(guardada && guardada.pngBase64);
+  const [eleccion, setEleccion] = useState(null);   // 'guardada' | 'otra' (sin elegir: la guardada, si hay)
+  const modo = eleccion || (tieneGuardada ? 'guardada' : 'otra');
+  const [vacio, setVacio] = useState(true);
+  const [subida, setSubida] = useState(null);       // firma tomada de una imagen
+  const [guardar, setGuardar] = useState(null);     // sin tocar: guardarla si no hay una guardada
+  const guardarEf = guardar === null ? !tieneGuardada : guardar;
+  const [ocupado, setOcupado] = useState(false);
+  const pad = useRef(null);
+  const subir = async (archivo) => {
+    try { setSubida(await firmaDeImagen(archivo)); }
+    catch (e) { app.avisar(e.code === 'firma-invalida' ? 'alerta' : 'error', e.message); }
+  };
+  const firmar = async () => {
+    const firma = modo === 'guardada' ? { pngBase64: guardada.pngBase64, ancho: guardada.ancho, alto: guardada.alto } : (subida || (pad.current && pad.current.exportar()));
+    if (!firma) { app.avisar('alerta', 'Firma dentro del recuadro o sube una imagen de tu firma'); return; }
+    setOcupado(true);
+    // Guardarla en el perfil es un extra: si falla, igual se firma.
+    if (modo === 'otra' && guardarEf) { try { await DB.guardarFirma(uid, firma); } catch (e) { console.warn('No se guardó la firma en el perfil', e); } }
+    onListo(firma);
+  };
+  const listaParaFirmar = modo === 'guardada' || !!subida || !vacio;
+  return (
+    <Modal titulo={titulo} ancho="ancho" onCerrar={() => onListo(null)} pie={<><Boton onClick={() => onListo(null)}>Cancelar</Boton><Boton variante="primario" icono="firma" cargando={ocupado} disabled={cargando || !listaParaFirmar} onClick={firmar}>{textoOk}</Boton></>}>
+      <div className="grid gap-3">
+        {mensaje ? <p className="text-sm">{mensaje}</p> : null}
+        {cargando ? <Esqueleto filas={2} /> : modo === 'guardada' ? (
+          <div className="grid gap-2">
+            <div className="etiqueta">Tu firma</div>
+            <img className="firma-vista" alt="Tu firma guardada" src={`data:image/png;base64,${guardada.pngBase64}`} />
+            <button type="button" className="underline text-sm justify-self-start" onClick={() => setEleccion('otra')}>Firmar de otra forma</button>
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {subida ? (
+              <div className="flex items-center gap-3 flex-wrap"><img className="firma-vista" alt="Firma subida" src={`data:image/png;base64,${subida.pngBase64}`} /><Boton tam="xs" variante="fantasma" icono="basura" onClick={() => setSubida(null)}>Quitar</Boton></div>
+            ) : <PadFirma padRef={pad} onCambio={setVacio} etiqueta="Recuadro para firmar el documento" />}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <label className="underline cursor-pointer">O sube una imagen de tu firma<input type="file" className="sr-solo" accept="image/png,image/jpeg,image/webp" onChange={(e) => { subir(e.target.files[0]); e.target.value = ''; }} /></label>
+              {tieneGuardada ? <button type="button" className="underline" onClick={() => { setEleccion('guardada'); setSubida(null); }}>Usar mi firma guardada</button> : null}
+            </div>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="caja" checked={guardarEf} onChange={(e) => setGuardar(e.target.checked)} />{tieneGuardada ? 'Reemplazar mi firma guardada por esta' : 'Guardar esta firma en mi perfil para la próxima vez'}</label>
+          </div>
+        )}
+        <p className="text-xs texto-2">Tu firma, tu nombre, la fecha y la hora quedan en el Word del informe.</p>
+      </div>
+    </Modal>
+  );
+};
+
 // Botones de descarga / vista previa reutilizados en varias pantallas.
 const AccionesEnvio = ({ envio, compacto }) => {
   const app = useApp();
@@ -95,9 +183,15 @@ const AccionesEnvio = ({ envio, compacto }) => {
   const contexto = async () => {
     const contrato = app.contratos.find((c) => c.id === envio.contratoId) || await DB.obtenerContrato(envio.contratoId);
     const usuario = envio.contratistaUid === app.usuario.id ? app.usuario : (await DB.obtenerPerfil(envio.contratistaUid)) || { nombreCompleto: '', nombreCorto: '' };
-    let firma;
-    try { firma = await DB.obtenerFirma(envio.contratistaUid); } catch (e) { firma = null; }
-    return { envio, formulario, contrato, usuario, parametros: app.parametros, firma };
+    const [perfil, firmas] = await Promise.all([
+      DB.obtenerFirma(envio.contratistaUid).catch(() => null),
+      admiteFirmaEnLinea(formulario) ? DB.obtenerFirmasEnvio(envio.id) : { contratista: null, validador: null },
+    ]);
+    // La firma en línea del envío manda; sin ella (envíos de antes), la del perfil, como siempre. El
+    // Vo.Bo. del validador solo sale mientras el envío esté aprobado (si se reabre, deja de valer).
+    const contratista = firmaVigente(firmas.contratista, envio, ['enviado', 'reenviado']);
+    const validador = envio.estado === 'aprobado' ? firmaVigente(firmas.validador, envio, ['aprobado']) : null;
+    return { envio, formulario, contrato, usuario, parametros: app.parametros, firma: contratista || perfil, firmas: { contratista, validador } };
   };
   const generar = async () => Descargas.generarDocx(await contexto());
   const descargar = async () => {
@@ -691,6 +785,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const formulario = app.formularios.find((f) => f.id === formularioId);
   const contratoBarra = app.contrato;
   const [previa, setPrevia] = useState(null);
+  const [firmando, setFirmando] = useState(null);   // { titulo, mensaje, textoOk, resolver }: modal de firma en línea
   const [estadoGuardado, setEstadoGuardado] = useState({ fecha: null, guardando: false, error: null });
   // Decisión sobre el borrador ('continuar' | 'nuevo') de ESTOS datos: al cambiar de contrato o de
   // período se vuelve a preguntar por el borrador del contexto nuevo.
@@ -897,13 +992,27 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     // Corrección de un envío sin camposPlantilla: lo nuevo que quedó vacío no se guarda (sinNuevosVacios).
     const respuestas = correccion && !Array.isArray(envio.camposPlantilla) ? sinNuevosVacios(respuestasMotor, correccion.relajados) : respuestasMotor;
     const texto = esCorreccion ? '¿Reenviar el envío corregido? Volverá al revisor en el mismo paso.' : `¿Enviar ${formulario.nombre} de ${U.nombrePeriodo(periodo)}? ${limite != null ? 'Después de enviar solo podrás cambiarlo con una solicitud de corrección.' : ''}`;
-    if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
+    // El informe se firma en línea al enviarlo (quien diligencia en nombre del contratista no firma por él).
+    let firma = null;
+    if (admiteFirmaEnLinea(formulario) && !enNombreDeOtro) {
+      const textoOk = esCorreccion ? 'Firmar y reenviar' : 'Firmar y enviar';
+      firma = await new Promise((resolver) => setFirmando({ titulo: textoOk, mensaje: texto, textoOk, resolver }));
+      if (!firma) return;
+    } else if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
+    // La firma va aparte del envío (envios/{id}/firmas): si no se guarda, el envío vale igual y el Word
+    // usa la firma del perfil.
+    const firmarElEnvio = async (envioId) => {
+      if (!firma) return;
+      try { await DB.firmarEnvio(envioId, 'contratista', { ...firma, uid: app.usuario.id, nombre: app.usuario.nombreCompleto, rol: app.rol }); }
+      catch (e) { console.error(e); app.avisar('alerta', `Se envió, pero la firma en línea no se guardó (${motivoFirma(e)}). El Word usa la firma de tu perfil.`); }
+    };
     try {
       const docs = await armarDocumentos(respuestas, '');
       const fecha = new Date();
       if (esCorreccion) {
         const entrada = { estado: 'reenviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: '' };
         await DB.actualizarEnvio(envio.id, { respuestas, ...docs, estado: 'reenviado', enCorreccion: false, historial: [...(envio.historial || []), entrada] });
+        await firmarElEnvio(envio.id);
         // Las solicitudes aprobadas que incluían este envío pasan a finalizada.
         try {
           const aprobadas = await DB.listarSolicitudes({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, estado: 'aprobada' });
@@ -930,6 +1039,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         historial: [{ estado: 'enviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: '' }],
       };
       const { id } = await DB.crearEnvio(envioNuevo, consecutivo);
+      await firmarElEnvio(id);
       try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* nada */ }
       try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ }
       await Flujos.notificar({ evento: 'envio', coleccion: 'envios', docId: id, por: app.usuario.id });
@@ -965,16 +1075,35 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
         onCambioRespuestas={(r, c, cambiado) => { respuestasActuales.current = r; capituloActual.current = c; hayCambios.current = cambiado; }}
         onCambioSubidas={(n) => { subiendo.current = n; }} />
       {previa ? <VistaPreviaDocx titulo={`Vista previa · ${formulario.nombre}`} generar={previa.generar} onCerrar={() => setPrevia(null)} /> : null}
+      {firmando ? <ModalFirmar titulo={firmando.titulo} mensaje={firmando.mensaje} textoOk={firmando.textoOk} onListo={(f) => { const { resolver } = firmando; setFirmando(null); resolver(f); }} /> : null}
     </div>
   );
 };
 
 /* ===== 8. Perfil y firma ===== */
+// La firma del perfil dibujada en pantalla.
+const ModalDibujarFirma = ({ onCerrar, onGuardar }) => {
+  const pad = useRef(null);
+  const [vacio, setVacio] = useState(true);
+  const [ocupado, setOcupado] = useState(false);
+  const guardar = async () => {
+    const firma = pad.current && pad.current.exportar();
+    if (!firma) return;
+    setOcupado(true);
+    try { await onGuardar(firma); } finally { setOcupado(false); }
+  };
+  return (
+    <Modal titulo="Dibujar mi firma" ancho="ancho" onCerrar={onCerrar} pie={<><Boton onClick={onCerrar}>Cancelar</Boton><Boton variante="primario" icono="check" cargando={ocupado} disabled={vacio} onClick={guardar}>Guardar firma</Boton></>}>
+      <PadFirma padRef={pad} onCambio={setVacio} etiqueta="Recuadro para dibujar tu firma" />
+    </Modal>
+  );
+};
 const PaginaPerfil = () => {
   const app = useApp();
   const u = app.usuario;
   const [telefono, setTelefono] = useState(u.telefono || '');
   const [guardando, setGuardando] = useState(false);
+  const [dibujar, setDibujar] = useState(false);
   const [claves, setClaves] = useState({ a: '', b: '' });
   const { datos: firma, recargar } = useCarga(() => DB.obtenerFirma(u.id).catch(() => null), [u.id]);
   const guardarTelefono = async () => {
@@ -982,27 +1111,12 @@ const PaginaPerfil = () => {
     try { await DB.actualizarPerfil(u.id, { telefono: telefono.trim() }); app.avisar('exito', 'Teléfono guardado'); app.recargarTodo(); }
     catch (e) { app.avisar('error', DB.traducirError(e)); } finally { setGuardando(false); }
   };
-  // La firma se reduce en canvas hasta caber en 150 KB (límite del documento privado).
+  const guardarFirma = async (firma) => { await DB.guardarFirma(u.id, firma); app.avisar('exito', 'Firma guardada'); recargar(); };
+  // La imagen se reduce en canvas hasta caber en 150 KB (límite del documento privado).
   const cargarFirma = async (archivo) => {
     if (!archivo) return;
-    if (!/image\/(png|jpeg|jpg|webp)/.test(archivo.type)) { app.avisar('alerta', 'Usa una imagen PNG (fondo transparente) o JPG'); return; }
-    try {
-      const dataUrl = await U.leerArchivoDataURL(archivo);
-      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
-      let ancho = Math.min(img.width, 900), alto = Math.round(img.height * (ancho / img.width));
-      let base64 = '';
-      for (let intento = 0; intento < 6; intento++) {
-        const c = document.createElement('canvas'); c.width = ancho; c.height = alto;
-        c.getContext('2d').drawImage(img, 0, 0, ancho, alto);
-        base64 = c.toDataURL('image/png').split(',')[1];
-        if (base64.length * 0.75 <= 150 * 1024) break;
-        ancho = Math.round(ancho * 0.8); alto = Math.round(alto * 0.8);
-      }
-      if (base64.length * 0.75 > 150 * 1024) { app.avisar('error', 'La firma sigue pesando más de 150 KB; recórtala o usa menos resolución'); return; }
-      await DB.guardarFirma(u.id, { pngBase64: base64, ancho, alto });
-      app.avisar('exito', 'Firma guardada');
-      recargar();
-    } catch (e) { app.avisar('error', DB.traducirError(e)); }
+    try { await guardarFirma(await firmaDeImagen(archivo)); }
+    catch (e) { app.avisar(e.code === 'firma-invalida' ? 'alerta' : 'error', e.code === 'firma-invalida' ? e.message : DB.traducirError(e)); }
   };
   const quitarFirma = async () => {
     if (!(await app.confirmar({ titulo: 'Quitar firma', mensaje: 'El Word saldrá sin firma hasta que subas otra.', textoOk: 'Quitar', peligro: true }))) return;
@@ -1024,9 +1138,13 @@ const PaginaPerfil = () => {
         </div></div>
         <div className="grid gap-4">
           <div className="tarjeta"><div className="tarjeta-cabecera"><h2>Firma para el Word</h2></div><div className="tarjeta-cuerpo grid gap-3">
-            <p className="text-sm texto-2">Imagen PNG con fondo transparente (máx. 150 KB). Se escala al recuadro del formato (2,35″ × 0,41″) conservando la proporción.</p>
-            {firma && firma.pngBase64 ? <div className="flex items-center gap-3 flex-wrap"><img className="firma-vista" alt="Firma actual" src={`data:image/png;base64,${firma.pngBase64}`} /><Boton tam="sm" variante="fantasma" icono="basura" onClick={quitarFirma}>Quitar</Boton></div> : <span className="texto-3 text-sm">Sin firma: el Word saldrá con el espacio en blanco.</span>}
-            <label className="zona-soltar block cursor-pointer"><input type="file" className="sr-solo" accept="image/png,image/jpeg,image/webp" onChange={(e) => { cargarFirma(e.target.files[0]); e.target.value = ''; }} /><div className="flex items-center justify-center gap-2 text-sm"><Icono nombre="firma" /> Subir imagen de la firma</div></label>
+            <p className="text-sm texto-2">Dibújala aquí o sube una imagen PNG con fondo transparente (máx. 150 KB). Es la que se propone al firmar en línea el informe y se escala al recuadro del formato (2,35″ × 0,41″) conservando la proporción.</p>
+            {firma && firma.pngBase64 ? <div className="flex items-center gap-3 flex-wrap"><img className="firma-vista" alt="Firma actual" src={`data:image/png;base64,${firma.pngBase64}`} /><Boton tam="sm" variante="fantasma" icono="basura" onClick={quitarFirma}>Quitar</Boton></div> : <span className="texto-3 text-sm">Sin firma guardada: al firmar en línea la dibujas en el momento.</span>}
+            <div className="grid sm:grid-cols-2 gap-2">
+              <Boton icono="firma" onClick={() => setDibujar(true)}>Dibujar mi firma</Boton>
+              <label className="zona-soltar block cursor-pointer" style={{ padding: '0.6rem' }}><input type="file" className="sr-solo" accept="image/png,image/jpeg,image/webp" onChange={(e) => { cargarFirma(e.target.files[0]); e.target.value = ''; }} /><div className="flex items-center justify-center gap-2 text-sm"><Icono nombre="subir" /> Subir imagen de la firma</div></label>
+            </div>
+            {dibujar ? <ModalDibujarFirma onCerrar={() => setDibujar(false)} onGuardar={async (f) => { try { await guardarFirma(f); setDibujar(false); } catch (e) { app.avisar('error', DB.traducirError(e)); } }} /> : null}
           </div></div>
           {!MODO_DEMO ? <div className="tarjeta"><div className="tarjeta-cabecera"><h2>Contraseña</h2></div><div className="tarjeta-cuerpo grid gap-3">
             <div className="grid sm:grid-cols-2 gap-3"><Campo etiqueta="Nueva contraseña" id="clave-a"><Entrada id="clave-a" type="password" autoComplete="new-password" value={claves.a} onChange={(e) => setClaves({ ...claves, a: e.target.value })} /></Campo><Campo etiqueta="Repetir" id="clave-b"><Entrada id="clave-b" type="password" autoComplete="new-password" value={claves.b} onChange={(e) => setClaves({ ...claves, b: e.target.value })} /></Campo></div>

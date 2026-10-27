@@ -26,12 +26,29 @@
     }
     return cacheImagenes;
   };
-  // firma: { pngBase64, ancho, alto } (usuarios/{uid}/privado/firma) o null.
-  const imagenesCon = (firma) => {
-    const base = imagenesBase();
-    if (!firma || !firma.pngBase64) return { ...base };
-    try { return { ...base, firma: U.uint8DeBase64(firma.pngBase64), tipoFirma: 'png', firmaAncho: Number(firma.ancho) || 0, firmaAlto: Number(firma.alto) || 0 }; }
-    catch (e) { console.warn('Firma inválida, se omite', e); return { ...base }; }
+  // firma: { pngBase64, ancho, alto } (la firma en línea del envío o la del perfil) o null;
+  // validador: la firma en línea del Vo.Bo. (solo el informe la usa).
+  const imagenesCon = (firma, validador) => {
+    const r = { ...imagenesBase() };
+    const bytes = (f) => {
+      if (!f || !f.pngBase64) return null;
+      try { return U.uint8DeBase64(f.pngBase64); } catch (e) { console.warn('Firma inválida, se omite', e); return null; }
+    };
+    const c = bytes(firma);
+    if (c) Object.assign(r, { firma: c, tipoFirma: 'png', firmaAncho: Number(firma.ancho) || 0, firmaAlto: Number(firma.alto) || 0 });
+    const v = bytes(validador);
+    if (v) Object.assign(r, { firmaValidador: v, firmaValidadorAncho: Number(validador.ancho) || 0, firmaValidadorAlto: Number(validador.alto) || 0 });
+    return r;
+  };
+  // Notas de las firmas en línea (envios/{id}/firmas): quién y cuándo firmó cada una.
+  const conNotasDeFirma = (datos, firmas) => {
+    const f = firmas || {};
+    const cuando = (x) => (x && x.firmadoEn ? U.fechaHora(x.firmadoEn) : '');
+    return {
+      ...datos,
+      firmaContratistaTexto: cuando(f.contratista) ? `Firmado en línea el ${cuando(f.contratista)}` : '',
+      voBoFirmaTexto: cuando(f.validador) ? `Firmado en línea por ${f.validador.nombre || 'el validador'} el ${cuando(f.validador)}` : '',
+    };
   };
 
   /* ===== 2. Opciones, valores legibles y foto ===== */
@@ -171,9 +188,9 @@
     const { a, m } = U.partesISO(datos.periodo.hasta || datos.fechaElaboracion || U.hoyISO());
     return raiz.InformeDocx.nombreArchivoInforme({ sigla: (parametros && parametros.siglaArchivo) || 'ITMSIF', nombreCorto: (usuario && usuario.nombreCorto) || 'Contratista', numeroInforme: datos.numeroInforme, mes: m, anio: a });
   };
-  const generarInforme = async (datos, { usuario, parametros, firma }) => {
+  const generarInforme = async (datos, { usuario, parametros, firma, firmas }) => {
     const D = raiz.docx;
-    const doc = raiz.InformeDocx.construirInformeDocx(datos, imagenesCon(firma), D);
+    const doc = raiz.InformeDocx.construirInformeDocx(conNotasDeFirma(datos, firmas), imagenesCon(firma, firmas && firmas.validador), D);
     const blob = await D.Packer.toBlob(doc);
     return { blob, nombre: nombreInforme(datos, { usuario, parametros }) };
   };
@@ -362,9 +379,10 @@
     if (formulario.plantillaDescarga === 'cuenta_cobro_provisional') return armarDatosCuentaCobro({ respuestas, formulario, contrato, usuario, parametros, catalogos });
     return { formato: 'generica', voBoTexto: voBoTexto || '' };
   };
-  const generarDocx = async ({ envio, formulario, contrato, usuario, parametros, firma }) => {
+  // firmas (opcional): { contratista, validador } en línea del envío, con su imagen, quién y cuándo.
+  const generarDocx = async ({ envio, formulario, contrato, usuario, parametros, firma, firmas }) => {
     const plantilla = formulario.plantillaDescarga;
-    if (plantilla === 'informe_itm_sif' && envio.datosDescarga && envio.datosDescarga.periodo) return generarInforme(envio.datosDescarga, { usuario, parametros, firma });
+    if (plantilla === 'informe_itm_sif' && envio.datosDescarga && envio.datosDescarga.periodo) return generarInforme(envio.datosDescarga, { usuario, parametros, firma, firmas });
     if (plantilla === 'cuenta_cobro_provisional' && envio.datosDescarga && envio.datosDescarga.formato) return generarCuentaCobro(envio.datosDescarga, { usuario, firma });
     const estado = (U.ESTADOS[envio.estado] || {}).etiqueta || envio.estado || '';
     return generarGenerica({
