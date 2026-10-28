@@ -101,6 +101,7 @@ const RUTAS_ICONO = {
   mover: <><path d="M8 6h.01M8 12h.01M8 18h.01M16 6h.01M16 12h.01M16 18h.01" /></>,
   advertencia: <><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></>,
   firma: <><path d="M3 17c3-4 5-6 7-6s2 4 4 4 3-6 5-6" /><path d="M3 21h18" /></>,
+  guardar: <><path d="M5 3h11l3 3v15H5z" /><path d="M8 3v5h7V3" /><path d="M8 21v-7h8v7" /></>,
   copiar: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5h10" /></>,
   bandera: <><path d="M5 21V4h12l-2 4 2 4H5" /></>,
   escudo: <><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3z" /><path d="m9 12 2 2 4-4" /></>,

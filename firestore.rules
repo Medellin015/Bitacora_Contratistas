@@ -216,6 +216,21 @@ service cloud.firestore {
         && request.resource.data.historial.size() == resource.data.historial.size() + 1
         && soloCambia(['respuestas', 'foto', 'datosDescarga', 'anexos', 'totales', 'estado', 'enCorreccion', 'historial', 'actualizadoEn']);
     }
+    // Cambios del contratista después de enviar (el informe): lo edita y lo envía de nuevo mientras no
+    // esté aprobado ni en corrección, con la ventana del período abierta. Vuelve al primer paso de
+    // revisión y deja rastro en el historial; el consecutivo, el período y el equipo no cambian.
+    function reenvioPropio() {
+      let f = get(rutaFormulario(resource.data.formularioId)).data;
+      let flujo = f.config.get('flujoEstados', []);
+      return esDuenoDoc(resource.data)
+        && resource.data.estado in ['enviado', 'reenviado', 'en_revision', 'aprobado_revisor']
+        && resource.data.enCorreccion == false
+        && ventanaAbierta(resource.data.formularioId, resource.data.periodo, f)
+        && request.resource.data.estado == 'reenviado'
+        && request.resource.data.historial.size() == resource.data.historial.size() + 1
+        && (noCambia('pasoActual') || (flujo.size() > 1 && request.resource.data.pasoActual == flujo[1]))
+        && soloCambia(['respuestas', 'foto', 'datosDescarga', 'anexos', 'totales', 'estado', 'pasoActual', 'historial', 'actualizadoEn']);
+    }
     // Revisión: tomar, aprobar, devolver o reabrir. Solo cambia el estado y el flujo
     // (y el Vo.Bo. digital de la descarga), y siempre agrega una entrada al historial.
     function transicionDelEquipo() {
@@ -251,7 +266,7 @@ service cloud.firestore {
     match /envios/{envioId} {
       allow get, list: if esAdmin() || esDuenoOEquipo(resource.data);
       allow create: if esAdmin() || envioPropioValido(envioId);
-      allow update: if (esAdmin() && noCambia('enviadoEn')) || correccionPropia() || transicionDelEquipo();
+      allow update: if (esAdmin() && noCambia('enviadoEn')) || correccionPropia() || reenvioPropio() || transicionDelEquipo();
       allow delete: if esAdmin();
 
       match /firmas/{quien} {

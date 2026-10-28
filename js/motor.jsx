@@ -722,6 +722,33 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
   }
   return R;
 };
+// «valorSi» de una subpregunta: { condicion (sobre fila.*), valor }. Cuando la condición de la fila
+// empieza a cumplirse, la celda vacía toma «valor»; cuando deja de cumplirse, se vacía si aún lo
+// tiene (p. ej. 0 % → «Esta actividad no se requirió en este periodo»). Lo escrito a mano no se pisa.
+// Al abrir (inicial), las celdas vacías de las filas que ya la cumplen lo toman.
+const aplicarValoresSi = (formulario, antes, despues, { inicial = false } = {}) => {
+  let R = despues;
+  (formulario.capitulos || []).forEach((cap) => (cap.preguntas || []).forEach((q) => {
+    const subs = q.tipo === 'COMPUESTA' ? (q.subpreguntas || []).filter((s) => s.valorSi && s.valorSi.condicion) : [];
+    if (!subs.length || !Array.isArray(R[q.id]) || (!inicial && antes && antes[q.id] === R[q.id])) return;
+    const previas = !inicial && antes && Array.isArray(antes[q.id]) ? antes[q.id] : [];
+    const cumple = (s, fila) => !!fila && Formulas.evaluarCondicion(s.valorSi.condicion, (n) => (String(n).startsWith('fila.') ? fila[String(n).slice(5)] : R[n]));
+    let cambio = false;
+    const filas = R[q.id].map((f, i) => {
+      const previa = (f && f[ID_FILA] ? previas.find((x) => x && x[ID_FILA] === f[ID_FILA]) : null) || previas[i];
+      let nueva = f;
+      subs.forEach((s) => {
+        const ahora = cumple(s, nueva), antesCumplia = !inicial && cumple(s, previa);
+        if (ahora && !antesCumplia && sinLlenar(nueva[s.id])) nueva = { ...nueva, [s.id]: s.valorSi.valor };
+        else if (!ahora && antesCumplia && nueva[s.id] === s.valorSi.valor) nueva = { ...nueva, [s.id]: '' };
+      });
+      if (nueva !== f) cambio = true;
+      return nueva;
+    });
+    if (cambio) R = { ...R, [q.id]: filas };
+  }));
+  return R;
+};
 
 /* ===== 7. MotorFormulario ===== */
 /**
@@ -729,19 +756,20 @@ const sincronizarEnlaces = (formulario, ctx, antes, despues, opciones = {}) => {
  *  formulario, ctx { usuario, contrato, parametros, periodo:{desde,hasta}, consecutivo, catalogos }
  *  respuestasIniciales (objeto o null), puedeEditar(q, capitulo) → bool
  *  ultimoEnvio (para «Traer del mes anterior») · subir(archivo, q) → { url, id, nombre }
- *  onGuardar(respuestas, capituloId) (autoguardado, 3 s) · estadoGuardado { fecha, guardando, error }
+ *  onGuardar(respuestas, capituloId) (autoguardado, 3 s; false si no se guardó en el servidor)
+ *  · estadoGuardado { fecha, guardando, error } · conBotonGuardar: botón «Guardar» (guarda ya y avisa)
  *  controlRef: la página recibe { pendiente(), vaciar() } para saber si hay un autoguardado
  *  pendiente y hacerlo ya (al cerrar la sesión o la pestaña)
  *  onEnviar(respuestasFinales) · onVistaPrevia(respuestasFinales) · textoEnviar · soloLectura
  *  onDescargar(respuestasFinales): «Descargar Word» con lo que va diligenciado (sin enviar)
  *  capituloInicial
  */
-const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, onEnviar, onVistaPrevia, onDescargar, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
+const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ultimoEnvio, subir, onGuardar, estadoGuardado, conBotonGuardar, onEnviar, onVistaPrevia, onDescargar, textoEnviar = 'Finalizar y enviar', soloLectura, capituloInicial, acciones, onCambioRespuestas, onCambioSubidas, controlRef }) => {
   const app = useApp();
   const capitulos = useMemo(() => U.ordenarPor(formulario.capitulos || [], (c) => c.orden || 0), [formulario]);
   const [respuestas, setRespuestas] = useState(() => {
     const R = armarRespuestasIniciales(formulario, ctx, respuestasIniciales);
-    return soloLectura ? R : sincronizarEnlaces(formulario, ctx, R, R, { inicial: true });
+    return soloLectura ? R : aplicarValoresSi(formulario, null, sincronizarEnlaces(formulario, ctx, R, R, { inicial: true }), { inicial: true });
   });
   const [capituloId, setCapituloId] = useState(capituloInicial || (capitulos[0] && capitulos[0].id));
   // Subidas en curso por celda y respuestas vigentes, para los controles (EstadoMotor).
@@ -751,6 +779,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   const [intentoEnvio, setIntentoEnvio] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [descargando, setDescargando] = useState(false);
+  const [guardandoYa, setGuardandoYa] = useState(false);
   const ahoraRef = useRef(false);   // el próximo autoguardado va sin esperar (se adjuntó un archivo)
   const estadoMotor = useMemo(() => ({
     subidas: (clave) => subidas[clave] || 0,
@@ -831,12 +860,12 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
     const previo = formularioPrevio.current;
     formularioPrevio.current = formulario;
     if (previo === formulario || U.igualProfundo(previo.capitulos || [], formulario.capitulos || [])) return;
-    if (!soloLectura) setRespuestas((r) => sincronizarEnlaces(formulario, ctx, r, r, { inicial: true }));
+    if (!soloLectura) setRespuestas((r) => aplicarValoresSi(formulario, null, sincronizarEnlaces(formulario, ctx, r, r, { inicial: true }), { inicial: true }));
   }, [formulario]); // eslint-disable-line
   // v puede ser una función del valor vigente (las compuestas la usan para no pisar cambios recientes).
   const cambiar = (id, v) => setRespuestas((r) => {
     const valor = typeof v === 'function' ? v(r[id]) : v;
-    return soloLectura ? { ...r, [id]: valor } : sincronizarEnlaces(formulario, ctx, r, { ...r, [id]: valor }, { editada: id });
+    return soloLectura ? { ...r, [id]: valor } : aplicarValoresSi(formulario, r, sincronizarEnlaces(formulario, ctx, r, { ...r, [id]: valor }, { editada: id }));
   });
 
   // Validación completa: { 'id' | 'comp.i.sub': mensaje } y conteo por capítulo.
@@ -891,7 +920,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
   };
   const mostrarErrores = intentoEnvio;
 
-  // Respuestas finales: las ocultas toman valorSiOculta (p. ej. 0 % → «Actividad no ejecutada…»).
+  // Respuestas finales: las ocultas toman valorSiOculta (p. ej. 0 % → evidencia vacía).
   const respuestasFinales = () => {
     const R = sinIdsDeFila(U.clonar(respuestas));
     capitulos.forEach((cap) => (cap.preguntas || []).forEach((q) => {
@@ -936,6 +965,21 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
       if (enviado) pendienteRef.current = null;
       else if (pendienteRef.current) pendienteRef.current();
     }
+  };
+  // «Guardar»: guarda ya lo que hay en pantalla (sin esperar el autoguardado) y dice cómo le fue.
+  const guardarAhora = async () => {
+    if (!guardarRef.current || enviandoRef.current) return;
+    clearTimeout(temporizadorRef.current);
+    pendienteRef.current = null;
+    guardadasRef.current = respuestas;
+    setGuardandoYa(true);
+    const p = Promise.resolve(guardarRef.current(respuestas, capituloRef.current));
+    enCursoRef.current = p;
+    try {
+      if ((await p) === false) app.avisar('alerta', 'No se pudo guardar en el servidor; quedó una copia en este dispositivo. Revisa la conexión y vuelve a guardar.');
+      else app.avisar('exito', 'Guardado');
+    } catch (e) { app.avisar('error', `No se pudo guardar: ${e.message}`); }
+    finally { if (enCursoRef.current === p) enCursoRef.current = null; setGuardandoYa(false); }
   };
   // «Traer del mes anterior» (solo preguntas marcadas y si el formulario lo permite).
   const traer = (formulario.config && formulario.config.precargarUltimoEnvio && ultimoEnvio && ultimoEnvio.respuestas) ? (id, indice, subId) => {
@@ -1009,6 +1053,7 @@ const MotorFormulario = ({ formulario, ctx, respuestasIniciales, puedeEditar, ul
               {acciones}
               {onVistaPrevia ? <Boton icono="ojo" onClick={() => onVistaPrevia(respuestasFinales())}>Vista previa</Boton> : null}
               {onDescargar ? <Boton icono="word" cargando={descargando} titulo="Descarga el Word con lo que llevas, sin enviarlo" onClick={async () => { setDescargando(true); try { await onDescargar(respuestasFinales()); } finally { setDescargando(false); } }}><span className="etiqueta-larga">Descargar Word</span><span className="etiqueta-corta">Word</span></Boton> : null}
+              {onGuardar && conBotonGuardar ? <Boton className="btn-guardar" icono="guardar" cargando={guardandoYa} disabled={enviando} titulo="Guarda lo que llevas, sin enviarlo" onClick={guardarAhora}>Guardar</Boton> : null}
               {onEnviar ? <Boton variante="primario" icono="enviar" cargando={enviando} onClick={enviar}>{textoEnviar}</Boton> : null}
             </div>
           </div>

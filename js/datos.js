@@ -406,8 +406,8 @@
         "id": "informe_mensual",
         "nombre": "Informe de ejecución mensual",
         "tipo": "INFORME_MENSUAL",
-        "version": 2,
-        "novedad": "Cada actividad ejecutada (más de 0 %) pide el nombre de su evidencia (obligatorio) y, si se quiere, un enlace o un archivo; en el Word aparece un anexo por cada una.",
+        "version": 3,
+        "novedad": "Con 0 % de ejecución, la descripción de la actividad se llena sola con «Esta actividad no se requirió en este periodo» (se puede cambiar).",
         "activo": true,
         "plantillaDescarga": "informe_itm_sif",
         "config": {
@@ -512,14 +512,16 @@
                     "etiqueta": "Descripción de actividades realizadas",
                     "tipo": "TEXTO_LARGO",
                     "obligatoria": true,
-                    "condicion": {
-                      "pregunta": "fila.porcentaje",
-                      "operador": "distinto",
-                      "valor": 0
+                    "valorSi": {
+                      "condicion": {
+                        "pregunta": "fila.porcentaje",
+                        "operador": "igual",
+                        "valor": 0
+                      },
+                      "valor": "Esta actividad no se requirió en este periodo"
                     },
-                    "valorSiOculta": "Actividad no ejecutada durante el período reportado",
                     "precargar": "ultimoEnvio",
-                    "ayuda": "Una idea por párrafo. Las URL se convierten en hipervínculos en el Word."
+                    "ayuda": "Una idea por párrafo. Las URL se convierten en hipervínculos en el Word. Con 0 % se llena sola con «Esta actividad no se requirió en este periodo»."
                   },
                   {
                     "id": "evidencia",
@@ -1414,6 +1416,8 @@
 
     // --- Borradores ---
     DB.idBorrador = (uid, contratoId, formularioId, periodo) => `${uid}_${contratoId}_${formularioId}_${periodo}`;
+    // Cambios a un envío ya hecho (se editan después de enviar y se vuelven a enviar): «uid_idDelEnvío».
+    DB.idBorradorEdicion = (uid, envioId) => `${uid}_${envioId}`;
     DB.obtenerBorrador = (id) => A.get('borradores', id);
     DB.guardarBorrador = (id, datos) => A.set('borradores', id, { ...datos, actualizadoEn: ahora() });
     DB.eliminarBorrador = (id) => A.delete('borradores', id);
