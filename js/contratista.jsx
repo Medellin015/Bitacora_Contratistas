@@ -117,6 +117,23 @@ const firmarComoContratista = async (app, envioId, firma, aviso) => {
   catch (e) { console.error(e); guardada = false; app.avisar('alerta', aviso(motivoFirma(e))); }
   return { firma: { quien: 'contratista', ...datos, firmadoEn: new Date() }, guardada };
 };
+/* ----- Editar después de enviar (el informe) ----- */
+// El informe enviado se puede editar y enviar de nuevo mientras no esté aprobado ni en corrección y
+// la ventana del período siga abierta (firestore.rules → reenvioPropio). Los cambios se guardan en
+// su propio borrador (DB.idBorradorEdicion) y llegan al revisor y al validador al enviarlo de nuevo.
+const editableTrasEnviar = (formulario) => admiteFirmaEnLinea(formulario);
+const puedeEditarTrasEnviar = (app, formulario, envio, ahora = new Date()) => {
+  if (!envio || !editableTrasEnviar(formulario) || envio.contratistaUid !== app.usuario.id || envio.enCorreccion || !ESTADOS_FIRMA_CONTRATISTA.includes(envio.estado)) return false;
+  if (!requiereVentana(formulario)) return true;
+  const ventana = (app.ventanas || []).find((v) => v.periodo === envio.periodo) || null;
+  return U.estadoVentana(ventana, formulario.id, ahora).estado === 'abierta';
+};
+// ¿Quedaron cambios guardados sin enviar? En el servidor o en la copia local que aún no llegó.
+const hayCambiosSinEnviar = async (app, envio) => {
+  const id = DB.idBorradorEdicion(app.usuario.id, envio.id);
+  try { if ((JSON.parse(localStorage.getItem(`bitacora.borrador.${id}`) || 'null') || {}).pendiente) return true; } catch (e) { /* sin copia local */ }
+  try { return !!(await DB.obtenerBorrador(id)); } catch (e) { return false; }
+};
 // Imagen (PNG, JPG o WebP) → { pngBase64, ancho, alto } que cabe en 150 KB (se reduce en canvas).
 const firmaDeImagen = async (archivo) => {
   const invalida = (mensaje) => { const e = new Error(mensaje); e.code = 'firma-invalida'; return e; };
@@ -339,13 +356,20 @@ const PaginaInicioContratista = () => {
       const e = envios.find((x) => x.periodo === app.periodo && x.formularioId === f.id);
       if (e && puedeFirmarContratista(app, e) && (await estadoFirmaContratista(e)) === 'pendiente') sinFirma[f.id] = e.id;
     }
-    return { envios, solicitudes, borradores, sinFirma };
+    // Informes enviados que se editaron y aún no se envían de nuevo.
+    const conCambios = {};
+    for (const f of app.formularios.filter((x) => x.activo && editableTrasEnviar(x))) {
+      const e = envios.find((x) => x.periodo === app.periodo && x.formularioId === f.id);
+      if (e && e.contratistaUid === app.usuario.id && (await hayCambiosSinEnviar(app, e))) conCambios[f.id] = e.id;
+    }
+    return { envios, solicitudes, borradores, sinFirma, conCambios };
   }, [contrato && contrato.id, app.periodo, app.usuario.id]);
   if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
   const envios = (datos && datos.envios) || [];
   const solicitudes = (datos && datos.solicitudes) || [];
   const borradores = (datos && datos.borradores) || {};
   const sinFirma = (datos && datos.sinFirma) || {};
+  const conCambios = (datos && datos.conCambios) || {};
   const delPeriodo = envios.filter((e) => e.periodo === app.periodo);
   const correcciones = envios.filter((e) => correccionVigente(e, ahora));
   const completitud = completitudInfo(fInfo, contrato);
@@ -362,15 +386,18 @@ const PaginaInicioContratista = () => {
       const abierta = !requiereVentana(f) || U.estadoVentana(app.ventana, f.id, ahora).estado === 'abierta';
       const limite = limiteDe(f);
       const puedeMas = limite == null || env.length < limite;
-      const faltaFirma = !!ultimo && sinFirma[f.id] === ultimo.id;
+      const cambiosSinEnviar = !!ultimo && conCambios[f.id] === ultimo.id;
+      const faltaFirma = !!ultimo && sinFirma[f.id] === ultimo.id && !cambiosSinEnviar;
       let detalle, accion, estado = 'pendiente';
-      if (ultimo) { detalle = <span className="flex items-center gap-2 flex-wrap"><ChipEstado estado={ultimo.estado} /><span className="mono text-xs">No. {ultimo.consecutivo}</span>{correccionVigente(ultimo, ahora) ? <span className="text-xs" style={{ color: 'var(--alerta)' }}>plazo {U.fechaHora(ultimo.fechaLimiteCorreccion)}</span> : null}{faltaFirma ? <Chip tipo="alerta" icono="firma">falta tu firma</Chip> : null}</span>; estado = ultimo.estado === 'aprobado' ? 'exito' : (ultimo.enCorreccion || faltaFirma ? 'alerta' : 'primario'); }
+      if (ultimo) { detalle = <span className="flex items-center gap-2 flex-wrap"><ChipEstado estado={ultimo.estado} /><span className="mono text-xs">No. {ultimo.consecutivo}</span>{correccionVigente(ultimo, ahora) ? <span className="text-xs" style={{ color: 'var(--alerta)' }}>plazo {U.fechaHora(ultimo.fechaLimiteCorreccion)}</span> : null}{faltaFirma ? <Chip tipo="alerta" icono="firma">falta tu firma</Chip> : null}{cambiosSinEnviar ? <Chip tipo="alerta" icono="editar">cambios sin enviar</Chip> : null}</span>; estado = ultimo.estado === 'aprobado' ? 'exito' : (ultimo.enCorreccion || faltaFirma || cambiosSinEnviar ? 'alerta' : 'primario'); }
       else if (borradores[f.id]) { detalle = `Borrador guardado ${U.tiempoRelativo(borradores[f.id].actualizadoEn)}`; estado = 'alerta'; }
       else detalle = abierta ? 'Pendiente de diligenciar' : 'Fuera de ventana';
       // El informe y la cuenta de cobro se diligencian y se corrigen en su página del menú.
       const proceso = navDe(app.rol).find((n) => n.proceso === f.tipo);
       // Sin la firma del contratista el informe no va al validador: «Firmar» lleva a su página y la pide.
       if (faltaFirma && proceso) accion = <Boton tam="sm" variante="acento" icono="firma" onClick={() => app.navegar(`${proceso.ruta}?firmar=1`)}>Firmar</Boton>;
+      // Lo enviado se editó y falta enviarlo de nuevo: «Continuar» abre la edición en su página.
+      else if (cambiosSinEnviar && proceso) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(proceso.ruta)}>Continuar</Boton>;
       else if (ultimo && correccionVigente(ultimo, ahora)) accion = <Boton tam="sm" variante="acento" icono="editar" onClick={() => app.navegar(proceso ? proceso.ruta : `#/formulario/${f.id}?modo=correccion&envio=${encodeURIComponent(ultimo.id)}`)}>Corregir</Boton>;
       else if (ultimo && !puedeMas) accion = <AccionesEnvio envio={ultimo} compacto />;
       else if (abierta) accion = <Boton tam="sm" variante="primario" icono={borradores[f.id] ? 'editar' : 'mas'} onClick={() => app.navegar(proceso && !ultimo ? proceso.ruta : `#/formulario/${f.id}?modo=nuevo`)}>{borradores[f.id] ? 'Continuar' : 'Diligenciar'}</Boton>;
@@ -634,13 +661,17 @@ const PaginaProceso = ({ tipo }) => {
   const [solicitar, setSolicitar] = useState(null);
   const [enviandoCorreo, setEnviandoCorreo] = useState(false);
   const [modalFirma, pedirFirma] = usePedirFirma();
+  const [editando, setEditando] = useState(null);        // id del envío que se pasó a «Editar»
+  const [conCambios, setConCambios] = useState(null);    // id del envío con cambios guardados en esta visita
   const { datos, cargando, error, recargar } = useCarga(async () => {
     if (!contrato || !formulario || !habilitado) return null;
     const envios = await DB.listarEnvios({ rol: app.rol, uid: app.usuario.id, contratoId: contrato.id, formularioId: formulario.id });
     // ¿El último del período ya tiene la firma del contratista? (si otra persona lo envió, falta).
     const ultimoP = admiteFirmaEnLinea(formulario) ? envios.find((e) => e.periodo === app.periodo) : null;
     const firma = ultimoP ? { envioId: ultimoP.id, estado: await estadoFirmaContratista(ultimoP) } : null;
-    return { contratoId: contrato.id, formularioId: formulario.id, envios, firma };
+    // ¿Quedaron cambios guardados sin enviar? (lo enviado se editó y no se envió de nuevo).
+    const cambios = ultimoP && editableTrasEnviar(formulario) && ultimoP.contratistaUid === app.usuario.id && (await hayCambiosSinEnviar(app, ultimoP)) ? ultimoP.id : null;
+    return { contratoId: contrato.id, formularioId: formulario.id, envios, firma, cambios };
   }, [contrato && contrato.id, formulario && formulario.id, app.periodo, app.usuario.id, habilitado]);
   const firmarYEnviar = async (envio) => {
     setEnviandoCorreo(true);
@@ -654,7 +685,7 @@ const PaginaProceso = ({ tipo }) => {
     firmarAlEntrar.current = false;
     history.replaceState(null, '', app.ruta.hash);
     const e = (datos.envios || []).find((x) => x.periodo === app.periodo);
-    if (e && datos.firma && datos.firma.envioId === e.id && datos.firma.estado === 'pendiente' && puedeFirmarContratista(app, e)) firmarYEnviar(e);
+    if (e && datos.firma && datos.firma.envioId === e.id && datos.firma.estado === 'pendiente' && puedeFirmarContratista(app, e) && datos.cambios !== e.id) firmarYEnviar(e);
   }, [datos]); // eslint-disable-line
   if (!habilitado) return <Vacio icono="candado" titulo={`${p.titulo}: deshabilitada por ahora`} texto="Cuando el administrador la habilite, podrás diligenciarla desde aquí." accion={<Boton onClick={() => app.navegar('#/inicio')}>Ir al inicio</Boton>} />;
   if (!contrato) return <Vacio icono="contrato" titulo="Sin contratos vinculados" texto="Cuando el administrador cree tu contrato aparecerá aquí. Si no lo ves, escribe al administrador." />;
@@ -671,11 +702,20 @@ const PaginaProceso = ({ tipo }) => {
   const porCorregir = envios.filter((e) => correccionVigente(e, ahora));
   const vencidas = envios.filter((e) => e.enCorreccion && !correccionVigente(e, ahora));
   const diligenciar = () => app.navegar(`#/formulario/${formulario.id}?modo=nuevo`);
+  // Lo enviado se puede editar (y enviar de nuevo) mientras no esté aprobado ni en corrección y la
+  // ventana siga abierta; con cambios guardados sin enviar, la página abre en la edición.
+  const editable = !!ultimo && puedeEditarTrasEnviar(app, formulario, ultimo, ahora);
+  const cambiosSinEnviar = !!ultimo && ((vigentes && vigentes.cambios === ultimo.id) || conCambios === ultimo.id);
   // El formulario del período en la página: nuevo (sin enviar, dentro del contrato y con la ventana
-  // abierta), la corrección abierta o, enviado, para verlo.
+  // abierta), la corrección abierta, la edición de lo enviado o, enviado, para verlo.
   const enPagina = !vigentes ? null
     : !ultimo ? (enContrato && abierta ? { modo: 'nuevo' } : null)
-      : { modo: correccionVigente(ultimo, ahora) ? 'correccion' : 'ver', envioId: ultimo.id };
+      : { modo: correccionVigente(ultimo, ahora) ? 'correccion' : editable && (editando === ultimo.id || cambiosSinEnviar) ? 'edicion' : 'ver', envioId: ultimo.id };
+  const editar = () => {
+    setEditando(ultimo.id);
+    setTimeout(() => { const el = document.getElementById('formulario-del-periodo'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 80);
+  };
+  const trasCambios = () => { setEditando(null); setConCambios(null); recargar(); };
   const corregir = (e) => {
     const abajo = enPagina && enPagina.modo === 'correccion' && enPagina.envioId === e.id && document.getElementById('formulario-del-periodo');
     if (abajo) abajo.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -687,7 +727,8 @@ const PaginaProceso = ({ tipo }) => {
       <AccionesEnvio envio={e} compacto={compacto} />
       <Boton tam={tam} variante="fantasma" icono="lista" onClick={() => setDetalle(e)}>Detalle</Boton>
       {correccionVigente(e, ahora) ? <Boton tam={tam} variante="acento" icono="editar" onClick={() => corregir(e)}>Corregir</Boton> : null}
-      {!e.enCorreccion ? <Boton tam={tam} variante="fantasma" icono="chat" onClick={() => setSolicitar(e)}>Solicitar corrección</Boton> : null}
+      {/* Lo que aún se puede editar se cambia con «Editar»; lo demás, con una solicitud. */}
+      {!e.enCorreccion && !puedeEditarTrasEnviar(app, formulario, e, ahora) ? <Boton tam={tam} variante="fantasma" icono="chat" onClick={() => setSolicitar(e)}>Solicitar corrección</Boton> : null}
     </>;
   };
   let delMes;
@@ -695,7 +736,8 @@ const PaginaProceso = ({ tipo }) => {
     // Firma del contratista en el último envío (solo el informe la lleva): sin ella no va al validador.
     const estadoFirma = vigentes.firma && vigentes.firma.envioId === ultimo.id ? vigentes.firma.estado : null;
     const conCorreo = puedeEnviarAlValidador(app, formulario);
-    const faltaFirma = estadoFirma === 'pendiente' && puedeFirmarContratista(app, ultimo);
+    // Con cambios sin enviar, la firma va al enviarlo de nuevo (firmar ahora mandaría lo anterior).
+    const faltaFirma = estadoFirma === 'pendiente' && puedeFirmarContratista(app, ultimo) && !cambiosSinEnviar;
     const pasoEnvio = [...(ultimo.historial || [])].reverse().find((h) => ['enviado', 'reenviado'].includes(h.estado));
     const enSuNombre = !!pasoEnvio && pasoEnvio.por !== app.usuario.id;
     delMes = (
@@ -704,16 +746,21 @@ const PaginaProceso = ({ tipo }) => {
           <ChipEstado estado={ultimo.estado} /><span className="mono text-sm">No. {ultimo.consecutivo}</span><span className="text-sm texto-2">enviado {U.fechaHora(ultimo.enviadoEn)}</span>
           {correccionVigente(ultimo, ahora) ? <Chip tipo="alerta" icono="reloj">corregir hasta {U.fechaHora(ultimo.fechaLimiteCorreccion)}</Chip> : null}
           {faltaFirma ? <Chip tipo="alerta" icono="firma">falta tu firma</Chip> : null}
+          {cambiosSinEnviar ? <Chip tipo="alerta" icono="editar">cambios sin enviar</Chip> : null}
         </div>
+        {cambiosSinEnviar ? (
+          <Alerta tipo="alerta"><strong>Tienes cambios guardados sin enviar.</strong> Envíalo de nuevo («Enviar de nuevo», abajo) para que {conCorreo ? 'el revisor y el validador reciban' : 'el revisor reciba'} la versión actualizada; mientras tanto tienen la que enviaste.</Alerta>
+        ) : null}
         {faltaFirma ? (
           <Alerta tipo="alerta"><strong>Falta tu firma.</strong> {enSuNombre ? `${pasoEnvio.porNombre || 'Otra persona'} lo envió en tu nombre. ` : ''}{conCorreo ? 'Cuando lo firmes, le llega al validador.' : 'Fírmalo para que el Word lleve tu firma en línea.'}</Alerta>
         ) : null}
         <div className="flex flex-wrap gap-2">
           {faltaFirma ? <Boton tam="sm" variante="primario" icono="firma" cargando={enviandoCorreo} onClick={() => firmarYEnviar(ultimo)}>{conCorreo ? 'Firmar y enviar al validador' : 'Firmar el informe'}</Boton> : null}
+          {editable && enPagina && enPagina.modo === 'ver' ? <Boton tam="sm" variante="secundario" icono="editar" onClick={editar}>Editar</Boton> : null}
           {acciones(ultimo, false)}
           {/* Ya firmado: por si el correo automático no salió o el validador lo necesita otra vez. Si no se
               pudo saber si está firmado, al pulsarlo se pide la firma (cuando aún se puede firmar). */}
-          {conCorreo && (estadoFirma === 'firmado' || estadoFirma === 'desconocido') ? <Boton tam="sm" variante="fantasma" icono="correo" cargando={enviandoCorreo} onClick={() => firmarYEnviar(ultimo)}>Enviar al validador</Boton> : null}
+          {conCorreo && !cambiosSinEnviar && (estadoFirma === 'firmado' || estadoFirma === 'desconocido') ? <Boton tam="sm" variante="fantasma" icono="correo" cargando={enviandoCorreo} onClick={() => firmarYEnviar(ultimo)}>Enviar al validador</Boton> : null}
           {puedeMas && abierta && enContrato ? <Boton tam="sm" variante="primario" icono="mas" onClick={diligenciar}>Diligenciar otro</Boton> : null}
         </div>
       </div>
@@ -726,7 +773,8 @@ const PaginaProceso = ({ tipo }) => {
   const textoEnPagina = !enPagina ? null
     : enPagina.modo === 'nuevo' ? { titulo: `${formulario.nombre} · ${U.nombrePeriodo(app.periodo)}`, ayuda: p.ayuda }
       : enPagina.modo === 'correccion' ? { titulo: `Corrige ${p.cual}`, ayuda: `Cambia lo que pidió el revisor y reenvía${p.lo} antes del ${U.fechaHora(ultimo.fechaLimiteCorreccion)}. Los cambios se guardan al reenviar${p.lo}; también puedes descargar el Word.` }
-        : { titulo: 'Lo que enviaste', ayuda: ultimo.enCorreccion ? `El plazo para corregir${p.lo} venció: pide uno nuevo en Solicitudes.` : `Para cambiar${p.lo}, usa «Solicitar corrección»; cuando el revisor la apruebe, ${p.lo} corriges aquí mismo.` };
+        : enPagina.modo === 'edicion' ? { titulo: 'Edita lo que enviaste', ayuda: `Cambia lo que necesites y pulsa «Guardar». Los cambios llegan cuando lo envías de nuevo («Enviar de nuevo»), mientras no esté aprobado y la ventana siga abierta.` }
+          : { titulo: 'Lo que enviaste', ayuda: ultimo.enCorreccion ? `El plazo para corregir${p.lo} venció: pide uno nuevo en Solicitudes.` : editable ? `Para cambiar${p.lo}, pulsa «Editar»: puedes hacerlo y enviar${p.lo} de nuevo mientras no esté aprobado y la ventana siga abierta.` : `Para cambiar${p.lo}, usa «Solicitar corrección»; cuando el revisor la apruebe, ${p.lo} corriges aquí mismo.` };
   return (
     <div>
       <Encabezado titulo={p.titulo} subtitulo={`${contrato.numero}${contrato.etiqueta ? ` · ${contrato.etiqueta}` : ''} · ${U.nombrePeriodo(app.periodo)}`} acciones={<Boton tam="sm" variante="fantasma" icono="refrescar" onClick={() => recargar()} titulo="Actualizar">Actualizar</Boton>} />
@@ -743,7 +791,8 @@ const PaginaProceso = ({ tipo }) => {
         {enPagina ? (
           <section id="formulario-del-periodo" className="grid gap-3 scroll-mt-20" aria-label={`${formulario.nombre} de ${U.nombrePeriodo(app.periodo)}`}>
             <div><h2>{textoEnPagina.titulo}</h2><p className="text-sm texto-2 mt-0.5">{textoEnPagina.ayuda}</p></div>
-            <FormularioEnvio key={`${contrato.id}-${app.periodo}-${enPagina.modo}-${enPagina.envioId || ''}`} formularioId={formulario.id} modo={enPagina.modo} envioId={enPagina.envioId || ''} incrustado alEnviar={recargar} />
+            <FormularioEnvio key={`${contrato.id}-${app.periodo}-${enPagina.modo}-${enPagina.envioId || ''}`} formularioId={formulario.id} modo={enPagina.modo} envioId={enPagina.envioId || ''} incrustado
+              alEnviar={trasCambios} alDescartar={trasCambios} alGuardar={() => { if (ultimo) setConCambios(ultimo.id); }} />
           </section>
         ) : null}
         <div className="tarjeta">
@@ -899,9 +948,12 @@ const PaginaFormulario = () => {
 // El formulario de un envío (nuevo · corrección · ver), en su propia pantalla (#/formulario/…) o
 // «incrustado» en la página de su proceso: allí empieza en las actividades, uno nuevo sigue el borrador
 // sin preguntar y, al enviar o reenviar, avisa a la página (alEnviar) en vez de cambiar de pantalla.
-const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustado = false, alEnviar }) => {
+// modo: 'nuevo' (borrador) · 'correccion' (plazo del revisor) · 'edicion' (cambios a lo enviado, en
+// su propio borrador, que se envían de nuevo) · 'ver'. alGuardar: tras guardar un cambio (en edición).
+// alDescartar: tras «Descartar cambios».
+const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustado = false, alEnviar, alGuardar, alDescartar }) => {
   const app = useApp();
-  const sigueBorrador = incrustado && modo === 'nuevo';
+  const sigueBorrador = incrustado && (modo === 'nuevo' || modo === 'edicion');
   const formulario = app.formularios.find((f) => f.id === formularioId);
   const contratoBarra = app.contrato;
   const [previa, setPrevia] = useState(null);
@@ -959,9 +1011,9 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       const ic = (contrato.info && contrato.info.contratista) || {};
       usuarioFormulario = perfil || { id: contrato.contratistaUid, nombreCompleto: ic.nombreCompleto || '', nombreCorto: U.nombreCorto(...String(ic.nombreCompleto || '').split(/\s+(.*)/)), cedula: contrato.cedulaContratista || ic.cedula || '', correo: contrato.correoContratista || '' };
     }
-    const idBorrador = DB.idBorrador(uid, contrato.id, formulario.id, periodo);
+    const idBorrador = modo === 'edicion' && envio ? DB.idBorradorEdicion(uid, envio.id) : DB.idBorrador(uid, contrato.id, formulario.id, periodo);
     const [borrador, contador, lista] = await Promise.all([
-      modo === 'nuevo' ? DB.obtenerBorrador(idBorrador).catch(() => undefined) : Promise.resolve(null),   // undefined: no se pudo leer
+      modo === 'nuevo' || modo === 'edicion' ? DB.obtenerBorrador(idBorrador).catch(() => undefined) : Promise.resolve(null),   // undefined: no se pudo leer
       DB.obtenerContador(contrato.id, formulario.id).catch(() => null),
       DB.listarEnvios({ rol: app.rol, uid, contratoId: contrato.id, formularioId: formulario.id }),
     ]);
@@ -986,7 +1038,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     const b = datos && datos.borrador;
     if (!sigueBorrador || !b || !b.soloLocal || borradorSubido.current === datos) return;
     borradorSubido.current = datos;
-    DB.guardarBorrador(datos.idBorrador, { uid: app.usuario.id, contratoId: datos.contratoId, formularioId: datos.formularioIdBorrador, periodo: datos.periodo, respuestas: b.respuestas, capituloActual: b.capituloActual || null }).catch(() => {});
+    DB.guardarBorrador(datos.idBorrador, { uid: app.usuario.id, contratoId: datos.contratoId, formularioId: datos.formularioIdBorrador, periodo: datos.periodo, ...(modo === 'edicion' && datos.envio ? { envioId: datos.envio.id } : {}), respuestas: b.respuestas, capituloActual: b.capituloActual || null }).catch(() => {});
   }, [datos]); // eslint-disable-line
 
   if (!formulario) return <Vacio icono="formulario" titulo="Formulario no encontrado" accion={<Boton onClick={() => app.navegar('#/inicio')}>Volver al inicio</Boton>} />;
@@ -1005,15 +1057,17 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const ahora = new Date();
   const rango = U.recortarPeriodo(periodo, contrato);
   const esCorreccion = modo === 'correccion';
-  const correccion = esCorreccion && envio ? sinExigirLoNuevo(formulario, envio) : null;
+  const esEdicion = modo === 'edicion';
+  const correccion = (esCorreccion || esEdicion) && envio ? sinExigirLoNuevo(formulario, envio) : null;
   const esLectura = modo === 'ver';
+  const delEnvio = esEdicion ? { envioId: envio.id } : {};   // el borrador de edición dice de qué envío es
   const ventanaOk = !requiereVentana(formulario) || U.estadoVentana(app.ventana, formulario.id, ahora).estado === 'abierta';
   const limite = limiteDe(formulario);
 
   const guardarBorrador = async (respuestas, capituloActual) => {
     if (esLectura) return;
     // Con el contrato y el formulario del id del borrador (no los de pantalla, que pueden haber cambiado).
-    const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, respuestas, capituloActual: capituloActual || null };
+    const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, ...delEnvio, respuestas, capituloActual: capituloActual || null };
     ultimoGuardado.current = doc;
     setEstadoGuardado((s) => ({ ...s, guardando: true }));
     // Copia local marcada como pendiente hasta que el servidor confirme (ver usarLocal al cargar).
@@ -1024,12 +1078,15 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       await DB.guardarBorrador(idBorrador, doc);
       try { if ((JSON.parse(localStorage.getItem(clave) || 'null') || {}).actualizadoEn === local.actualizadoEn) localStorage.setItem(clave, JSON.stringify({ ...local, pendiente: false })); } catch (e) { /* nada */ }
       if (montado.current) setEstadoGuardado({ fecha: new Date(), guardando: false, error: null });
-    } catch (e) { if (montado.current) setEstadoGuardado({ fecha: null, guardando: false, error: 'no se guardó en el servidor (queda copia local)' }); }
+      if (esEdicion && alGuardar) alGuardar();
+      return true;
+    } catch (e) { if (montado.current) setEstadoGuardado({ fecha: null, guardando: false, error: 'no se guardó en el servidor (queda copia local)' }); return false; }
   };
   // Bloqueos previos (también se validan en las reglas).
   if (esCorreccion && (!envio || !correccionVigente(envio, ahora))) return <Alerta tipo="alerta">Este envío no está en corrección o el plazo venció. Pide un nuevo plazo en <button type="button" className="underline" onClick={() => app.navegar('#/solicitudes?pestana=correcciones')}>Solicitudes</button>.</Alerta>;
   if (esLectura && !envio) return <Alerta tipo="error">El envío no existe.</Alerta>;
-  if (!esCorreccion && !esLectura) {
+  if (esEdicion && !puedeEditarTrasEnviar(app, formulario, envio, ahora)) return <Alerta tipo="alerta">Este envío ya no se puede editar: está aprobado o en corrección, o la ventana de {U.nombrePeriodo(periodo)} cerró. Para cambiarlo, usa «Solicitar corrección».</Alerta>;
+  if (!esCorreccion && !esLectura && !esEdicion) {
     if (!enNombreDeOtro && !procesoHabilitado(app, formulario.tipo)) return <Vacio icono="candado" titulo={`${formulario.nombre}: deshabilitada por ahora`} texto="Cuando el administrador la habilite, podrás diligenciarla." accion={<Boton onClick={() => app.navegar('#/inicio')}>Ir al inicio</Boton>} />;
     if (!ventanaOk) return <Alerta tipo="alerta"><strong>La ventana de {U.nombrePeriodo(periodo)} no está abierta</strong> para {formulario.nombre}. Fuera de ventana solo se consulta; para corregir algo ya enviado, usa «Solicitar corrección».</Alerta>;
     if (limite != null && enviosPeriodo.length >= limite) {
@@ -1048,11 +1105,13 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   }
   const consecutivoSugerido = (contador ? Number(contador.ultimo) || 0 : 0) + 1;
   const ctx = { usuario: usuarioFormulario, contrato, parametros: app.parametros, catalogos: app.catalogos, periodo: rango || U.rangoPeriodo(periodo), consecutivo: consecutivoSugerido };
-  const respuestasIniciales = esCorreccion || esLectura ? envio.respuestas : (decisionBorrador === 'continuar' && borrador ? borrador.respuestas : null);
+  const respuestasIniciales = esCorreccion || esLectura ? envio.respuestas
+    : esEdicion ? (decisionBorrador === 'continuar' && borrador ? borrador.respuestas : envio.respuestas)
+      : (decisionBorrador === 'continuar' && borrador ? borrador.respuestas : null);
   const puedeEditar = (qx) => {
     if (esLectura) return false;
     if (qx.soloRevisor) return false;
-    if (esCorreccion && qx.editableEnCorreccion === false) return false;
+    if ((esCorreccion || esEdicion) && qx.editableEnCorreccion === false) return false;
     // El consecutivo solo se edita antes del primer envío del contrato (regla: nunca ≤ al último).
     if (qx.porDefecto === 'consecutivo' && contador) return false;
     return true;
@@ -1063,7 +1122,7 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     // corrección lee el envío. Sin flujo configurado no hace falta (subirArchivo avisa de una vez).
     // Sin red, Firestore no confirma la escritura: a los 15 s se avisa en vez de dejar la subida girando.
     if (!esCorreccion && respuestasActuales.current && (window.MODO_DEMO || Flujos.disponible('subirArchivo'))) {
-      const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, respuestas: respuestasActuales.current, capituloActual: capituloActual.current || null };
+      const doc = { uid: app.usuario.id, contratoId, formularioId: formularioIdBorrador, periodo, ...delEnvio, respuestas: respuestasActuales.current, capituloActual: capituloActual.current || null };
       ultimoGuardado.current = doc;
       const guardado = await Promise.race([DB.guardarBorrador(idBorrador, doc).then(() => true, (e) => e || new Error('Error desconocido')), U.esperar(15000).then(() => null)]);
       if (guardado === null) { const e = new Error('Sin conexión: no se pudo guardar el borrador antes de subir. Revisa la red e inténtalo de nuevo'); e.code = 'sin-red'; throw e; }
@@ -1111,14 +1170,16 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
   const enviar = async (respuestasMotor) => {
     // Corrección de un envío sin camposPlantilla: lo nuevo que quedó vacío no se guarda (sinNuevosVacios).
     const respuestas = correccion && !Array.isArray(envio.camposPlantilla) ? sinNuevosVacios(respuestasMotor, correccion.relajados) : respuestasMotor;
-    const texto = esCorreccion ? '¿Reenviar el envío corregido? Volverá al revisor en el mismo paso.' : `¿Enviar ${formulario.nombre} de ${U.nombrePeriodo(periodo)}? ${limite != null ? 'Después de enviar solo podrás cambiarlo con una solicitud de corrección.' : ''}`;
+    const texto = esCorreccion ? '¿Reenviar el envío corregido? Volverá al revisor en el mismo paso.'
+      : esEdicion ? `¿Enviar de nuevo ${formulario.nombre} de ${U.nombrePeriodo(periodo)} con tus cambios? Vuelve a revisión${puedeEnviarAlValidador(app, formulario) ? ' y le llega al validador' : ''}.`
+        : `¿Enviar ${formulario.nombre} de ${U.nombrePeriodo(periodo)}? ${editableTrasEnviar(formulario) ? 'Después podrás editarlo y enviarlo de nuevo mientras no esté aprobado y la ventana siga abierta.' : limite != null ? 'Después de enviar solo podrás cambiarlo con una solicitud de corrección.' : ''}`;
     // El informe se firma en línea al enviarlo (quien diligencia en nombre del contratista no firma en su lugar).
     let firma = null;
     if (admiteFirmaEnLinea(formulario) && !enNombreDeOtro) {
-      const textoOk = esCorreccion ? 'Firmar y reenviar' : 'Firmar y enviar';
+      const textoOk = esCorreccion ? 'Firmar y reenviar' : esEdicion ? 'Firmar y enviar de nuevo' : 'Firmar y enviar';
       firma = await pedirFirma({ titulo: textoOk, mensaje: texto, textoOk });
       if (!firma) return;
-    } else if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : 'Enviar' }))) return;
+    } else if (!(await app.confirmar({ titulo: esCorreccion ? 'Reenviar corrección' : esEdicion ? 'Enviar de nuevo' : 'Enviar formulario', mensaje: texto, textoOk: esCorreccion ? 'Reenviar' : esEdicion ? 'Enviar de nuevo' : 'Enviar' }))) return;
     // El informe va al correo del validador después de mostrarse enviado (no hace esperar a nadie) y
     // solo firmado por el contratista: si otra persona lo envió en su nombre, sale cuando el contratista lo firme.
     // Si falla, el aviso lo dice y queda el botón «Enviar al validador».
@@ -1133,6 +1194,24 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
     try {
       const docs = await armarDocumentos(respuestas, '');
       const fecha = new Date();
+      if (esEdicion) {
+        // Con el envío al día: si mientras tanto lo aprobaron, lo devolvieron o cerró la ventana, no va.
+        const actual = await DB.obtenerEnvio(envio.id);
+        if (!puedeEditarTrasEnviar(app, formulario, actual)) { app.avisar('alerta', 'No se envió de nuevo: el informe ya está aprobado o en corrección, o la ventana cerró. Tus cambios siguen guardados.'); return; }
+        const flujo = (formulario.config && formulario.config.flujoEstados) || [];
+        const entrada = { estado: 'reenviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: 'Cambios del contratista después de enviarlo' };
+        await DB.actualizarEnvio(envio.id, { respuestas, ...docs, estado: 'reenviado', pasoActual: flujo.length > 1 ? flujo[1] : 'ninguno', historial: [...(actual.historial || []), entrada] });
+        const firmaHecha = await firmarElEnvio(envio.id);
+        await Flujos.notificar({ evento: 'envio', coleccion: 'envios', docId: envio.id, por: app.usuario.id });
+        try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* nada */ }
+        try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ }
+        app.avisar('exito', `${formulario.nombre} enviado de nuevo · No. ${envio.consecutivo}`);
+        app.recargarContadores();
+        hayCambios.current = false;
+        trasEnviar();
+        alValidador(envio.id, firmaHecha);
+        return true;
+      }
       if (esCorreccion) {
         const entrada = { estado: 'reenviado', por: app.usuario.id, porNombre: app.usuario.nombreCompleto, rol: app.rol, fecha, observacion: '' };
         await DB.actualizarEnvio(envio.id, { respuestas, ...docs, estado: 'reenviado', enCorreccion: false, historial: [...(envio.historial || []), entrada] });
@@ -1175,16 +1254,33 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
       return true;
     } catch (e) {
       console.error(e);
-      app.avisar('error', e.code === 'permission-denied' ? 'No se pudo enviar: ya existe un envío para este período, la ventana cerró o no tienes permiso.' : DB.traducirError(e));
+      app.avisar('error', e.code !== 'permission-denied' ? DB.traducirError(e)
+        : esEdicion ? 'No se pudo enviar de nuevo: el informe cambió de estado, la ventana cerró o el administrador aún no publica las reglas de Firestore. Tus cambios siguen guardados.'
+          : 'No se pudo enviar: ya existe un envío para este período, la ventana cerró o no tienes permiso.');
     }
   };
-  const titulo = `${esCorreccion ? 'Corregir' : esLectura ? 'Ver' : 'Diligenciar'} · ${formulario.nombre}`;
+  // «Descartar cambios» (edición): se borra el borrador de edición y queda lo que se envió.
+  const descartarCambios = async () => {
+    if (!(await app.confirmar({ titulo: 'Descartar cambios', mensaje: 'Se borran los cambios que no has enviado y queda lo que enviaste.', textoOk: 'Descartar' }))) return;
+    // Lo pendiente se guarda primero: si no, al salir del formulario se guardaría y volvería.
+    if (control.current) await control.current.vaciar();
+    try { await DB.eliminarBorrador(idBorrador); } catch (e) { /* no existía */ }
+    try { localStorage.removeItem(`bitacora.borrador.${idBorrador}`); } catch (e) { /* nada */ }
+    hayCambios.current = false;
+    if (alDescartar) alDescartar(); else trasEnviar();
+  };
+  const titulo = `${esCorreccion ? 'Corregir' : esLectura ? 'Ver' : esEdicion ? 'Editar' : 'Diligenciar'} · ${formulario.nombre}`;
   return (
     <div>
       {incrustado ? null : <Encabezado titulo={titulo} subtitulo={`${contrato.numero} · ${U.nombrePeriodo(periodo)}${rango ? ` · ${U.textoPeriodo(rango.desde, rango.hasta)}` : ''}${esCorreccion ? ` · plazo ${U.fechaHora(envio.fechaLimiteCorreccion)}` : ''}`} migas={[{ texto: 'Inicio', onClick: () => app.navegar('#/inicio') }, { texto: formulario.nombre }]} />}
       {esCorreccion && envio.historial && envio.historial.length ? <Alerta tipo="alerta" className="mb-4"><strong>Observación del revisor:</strong> {envio.historial.slice(-1)[0].observacion || '—'}</Alerta> : null}
       {enNombreDeOtro ? <Alerta tipo="info" className="mb-4">Estás diligenciando <strong>en nombre de {usuarioFormulario.nombreCompleto || 'el contratista'}</strong>. El envío quedará registrado con tu usuario y rol en el historial (auditoría); el Word sale a nombre del contratista.{admiteFirmaEnLinea(formulario) ? ' La firma la hace el contratista después, desde su cuenta; sin ella no se envía al validador.' : ''}</Alerta> : null}
-      {sigueBorrador && decisionBorrador === 'continuar' && borrador ? (
+      {esEdicion ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <span className="text-sm texto-2">{decisionBorrador === 'continuar' && borrador ? 'Sigues con los cambios que guardaste.' : 'Aún no has cambiado nada.'}{incrustado ? '' : ` Los cambios llegan ${puedeEnviarAlValidador(app, formulario) ? 'al revisor y al validador' : 'al revisor'} cuando lo envías de nuevo.`}</span>
+          <Boton tam="sm" variante="fantasma" icono="x" onClick={descartarCambios}>Descartar cambios</Boton>
+        </div>
+      ) : sigueBorrador && decisionBorrador === 'continuar' && borrador ? (
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <span className="text-sm texto-2">Sigues con lo que dejaste guardado.</span>
           <Boton tam="sm" variante="fantasma" icono="basura" onClick={empezarDeNuevo}>Empezar de nuevo</Boton>
@@ -1194,9 +1290,9 @@ const FormularioEnvio = ({ formularioId, modo = 'nuevo', envioId = '', incrustad
           pendiente del anterior se guarda en su propio borrador, no en el del contexto nuevo).
           Una corrección o consulta solo depende de su envío. */}
       <MotorFormulario key={envio ? `envio-${envio.id}` : `${idBorrador}-${decisionBorrador}`} formulario={correccion ? correccion.plantilla : formulario} ctx={ctx} respuestasIniciales={respuestasIniciales} puedeEditar={puedeEditar} ultimoEnvio={ultimo}
-        subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
+        subir={subir} onGuardar={esLectura || esCorreccion ? null : guardarBorrador} conBotonGuardar={!esLectura && !esCorreccion} estadoGuardado={esCorreccion ? { nota: 'En una corrección los cambios se guardan al reenviarla' } : estadoGuardado} onEnviar={esLectura ? null : enviar} onVistaPrevia={formulario.config && formulario.config.vistaPrevia ? vistaPrevia : null}
         onDescargar={formulario.config && formulario.config.vistaPrevia ? descargarWord : null}
-        textoEnviar={esCorreccion ? 'Reenviar corrección' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : (incrustado ? capituloDeActividades(formulario) : undefined)}
+        textoEnviar={esCorreccion ? 'Reenviar corrección' : esEdicion ? 'Enviar de nuevo' : editableTrasEnviar(formulario) ? 'Enviar' : 'Finalizar y enviar'} soloLectura={esLectura} capituloInicial={decisionBorrador === 'continuar' && borrador ? borrador.capituloActual : (incrustado ? capituloDeActividades(formulario) : undefined)}
         acciones={incrustado ? null : <Boton variante="fantasma" onClick={() => app.navegar('#/inicio')}>Salir</Boton>} controlRef={control}
         onCambioRespuestas={(r, c, cambiado) => { respuestasActuales.current = r; capituloActual.current = c; hayCambios.current = cambiado; }}
         onCambioSubidas={(n) => { subiendo.current = n; }} />

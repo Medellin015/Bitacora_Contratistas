@@ -37,7 +37,7 @@
     pie: { anchoEmu: 7808997, altoEmu: 1317404, offsetYEmu: 477429,
       espaciadorAnchoEmu: 45719, espaciadorAltoEmu: 914375, tabDerecha: 8646, sangriaFrancesa: 1350 },
     firma: { anchoMaxEmu: 2152950, altoMaxEmu: 371527 },
-    textoNoEjecutada: 'Actividad no ejecutada durante el período reportado',
+    textoNoEjecutada: 'Esta actividad no se requirió en este periodo',
     textoVacio: 'NINGUNA',
   };
   const EMU_POR_PX = 9525;

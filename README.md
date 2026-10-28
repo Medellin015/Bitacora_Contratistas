@@ -96,18 +96,26 @@ El contratista ve cuatro apartados: **Inicio** (el tablero del período),
 - **Generación de informe de gestión** es donde se hace el informe: mientras
   el del período no se haya enviado (y la ventana esté abierta), el formulario
   está ahí mismo y abre en las **actividades** del contrato, cada una con su
-  % de ejecución, descripción y evidencia. Se guarda solo (al volver sigue lo
-  que se dejó, con **Empezar de nuevo** para descartarlo) y la barra de abajo
-  trae **Vista previa**, **Descargar Word** (el Word institucional con lo que
-  va diligenciado, sin enviarlo; en el celular el botón dice «Word») y
-  **Finalizar y enviar**. Ya enviado, la página muestra su estado con el Word,
-  el detalle y «Solicitar corrección» y, debajo, **lo que se envió**: las
-  mismas actividades, de solo lectura. Si el revisor abre una corrección (al
-  devolverlo o al aprobar la solicitud), las actividades se vuelven editables
-  ahí mismo, con la observación del revisor, **Descargar Word** y **Reenviar
-  corrección**. Al final quedan los informes anteriores del contrato. El
-  «Diligenciar» y el «Corregir» de Inicio llevan a esta página. La **Cuenta de
-  cobro** funciona igual cuando está habilitada.
+  % de ejecución, descripción y evidencia. Con **0 %**, la descripción se
+  llena sola con «Esta actividad no se requirió en este periodo» (se puede
+  cambiar) y no pide evidencia. La barra de abajo trae **Vista previa**,
+  **Descargar Word** (el Word institucional con lo que va diligenciado, sin
+  enviarlo; en el celular el botón dice «Word»), **Guardar** (guarda ya; además
+  se guarda solo cada pocos segundos y al volver sigue lo que se dejó, con
+  **Empezar de nuevo** para descartarlo) y **Enviar** (pide la firma).
+- **Después de enviarlo** se puede **Editar** mientras no esté aprobado ni en
+  corrección y la ventana siga abierta: los cambios se guardan aparte (el
+  revisor y el validador siguen viendo lo enviado) y quedan el aviso
+  «Tienes cambios guardados sin enviar» en la página y «cambios sin enviar»
+  en Inicio, hasta pulsar **Enviar de nuevo** (pide la firma otra vez, vuelve
+  al revisor y sale de nuevo al correo del validador) o **Descartar cambios**.
+  Ya aprobado (o con la ventana cerrada), se cambia con «Solicitar
+  corrección»: cuando el revisor abre la corrección, las actividades se vuelven
+  editables ahí mismo, con su observación y **Reenviar corrección**. Debajo
+  del estado se ve **lo que se envió**, y al final, los informes anteriores
+  del contrato. El «Diligenciar» y el «Corregir» de Inicio llevan a esta
+  página. La **Cuenta de cobro** funciona igual cuando está habilitada, salvo
+  la edición después de enviar (se cambia con «Solicitar corrección»).
 - **Cuenta de cobro: deshabilitada por ahora.** Se ve en el menú, en gris, y no
   se pueden diligenciar cuentas de cobro nuevas (las ya enviadas se siguen
   viendo, descargando y corrigiendo). Se habilita en **Parámetros → Procesos del
@@ -119,8 +127,8 @@ El contratista ve cuatro apartados: **Inicio** (el tablero del período),
 
 El informe de gestión se firma en la plataforma, sin imprimir:
 
-- **Contratista**: «Finalizar y enviar» (o «Reenviar corrección») pide
-  **Firmar y enviar**. Propone la firma guardada en **Mi perfil**; si no hay,
+- **Contratista**: «Enviar» (o «Enviar de nuevo», o «Reenviar corrección»)
+  pide **Firmar y enviar**. Propone la firma guardada en **Mi perfil**; si no hay,
   se dibuja en pantalla con el dedo, un lápiz o el mouse, o se sube una imagen,
   y puede quedar guardada para la próxima vez. Quien diligencia en nombre del
   contratista no firma en su lugar: el informe queda enviado y el contratista
@@ -160,8 +168,8 @@ contrato** por correo, con el flujo `enviarInforme` de Power Automate (ver
   administrador debe pulsar **Actualizar** en el aviso «Hay una versión
   nueva…».
 - La URL del flujo va en **Parámetros → enviarInforme**.
-- Solo sale **firmado por el contratista**: al enviarlo, la app le pide la
-  firma antes de mandar nada. Si otra persona lo envió en su nombre, no va al
+- Solo sale **firmado por el contratista**: al enviarlo (o enviarlo de nuevo
+  después de editarlo), la app le pide la firma antes de mandar nada. Si otra persona lo envió en su nombre, no va al
   validador hasta que el contratista lo firme (botón **Firmar y enviar al
   validador** en la página del informe, o **Firmar** en Inicio).
 - El correo se manda después de mostrar el informe como enviado, sin hacer
