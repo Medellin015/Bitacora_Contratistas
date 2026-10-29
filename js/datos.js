@@ -1537,7 +1537,7 @@
     const obligaciones = [
       { numero: 1, texto: 'Apoyar la articulación del sistema de gestión de calidad del proceso con los formatos, criterios y registros vigentes.' },
       { numero: 2, texto: 'Brindar apoyo para consolidar y mantener actualizados los registros del sistema de información.' },
-      { numero: 3, texto: 'Apoyar la integración de herramientas de Microsoft 365 para centralizar la información del proceso.' },
+      { numero: 3, texto: 'Apoyar la integración de las herramientas tecnológicas institucionales para centralizar la información del proceso.' },
     ];
     const inicioContrato = `${pAnterior}-02` < hoy ? `${pAnterior}-02` : U.sumarDias(hoy, -40);
     await DB.crearContrato('P-00000-DE-2026', {
@@ -1573,7 +1573,7 @@
       numeroInforme: 1, periodoDesde: inicioContrato > rAnt.desde ? inicioContrato : rAnt.desde, periodoHasta: rAnt.hasta, fechaElaboracion: rAnt.hasta,
       actividades: [
         { numero: 1, obligacion: obligaciones[0].texto, porcentaje: 100, descripcion: 'Se dio continuidad al seguimiento semestral del mapa de oportunidades del proceso.\nSe organizaron los registros del seguimiento.', evidencia: 'Registros del seguimiento semestral', evidenciaUrl: '', evidenciaArchivo: [] },
-        { numero: 2, obligacion: obligaciones[1].texto, porcentaje: 50, descripcion: 'Se apoyó la formulación de la acción de mejora y se actualizó el aplicativo de apoyo:\nhttps://ejemplo.github.io/aplicativo/', evidencia: 'Acción de mejora formulada', evidenciaUrl: 'https://ejemplo.github.io/aplicativo/', evidenciaArchivo: [] },
+        { numero: 2, obligacion: obligaciones[1].texto, porcentaje: 50, descripcion: 'Se apoyó la formulación de la acción de mejora y se actualizó el aplicativo de apoyo:\nhttps://example.com/aplicativo/', evidencia: 'Acción de mejora formulada', evidenciaUrl: 'https://example.com/aplicativo/', evidenciaArchivo: [] },
         { numero: 3, obligacion: obligaciones[2].texto, porcentaje: 0, descripcion: '', evidencia: '', evidenciaUrl: '', evidenciaArchivo: [] },
       ],
       dificultades: 'NINGUNA', observaciones: 'NINGUNA',
